@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- app_name comes from app/build.gradle.kts, so TEST_MODE builds are labelled differently. -->
+    <string name="accessibility_label">NightLock blocker</string>
+    <string name="accessibility_description">Lets NightLock see which app is on screen, so it can cover the apps you chose to block during your bedtime hours. NightLock has no internet access; nothing it sees leaves the phone.</string>
+</resources>

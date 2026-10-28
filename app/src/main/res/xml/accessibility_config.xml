@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kept as narrow as blocking allows. SecurityTest fails the build if anything here widens.
+
+  typeWindowStateChanged: an app or screen came to the front.
+  typeWindowsChanged + flagRetrieveInteractiveWindows: windows appeared or moved, so split screen
+  and Samsung pop-up windows are seen too. canRetrieveWindowContent lets the service ask which
+  package each window belongs to; the code reads nothing else from it.
+
+  Deliberately absent: text-change and click events, view IDs, key events, gestures, screenshots,
+  touch exploration, magnification, fingerprint gestures. canRetrieveWindowContent can't be narrowed
+  further by Android, so SecurityTest also checks the code reads only window package names.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_description"
+    android:isAccessibilityTool="false"
+    android:notificationTimeout="50" />

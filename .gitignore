@@ -1,0 +1,15 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+*.apk
+# Signing keys live in C:\Dev\android-toolchain\keys; never let one into the project.
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+*.pfx
+*.key
+*.p8
+*.der
