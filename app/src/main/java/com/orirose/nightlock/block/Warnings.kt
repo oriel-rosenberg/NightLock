@@ -25,8 +25,6 @@ object Warnings {
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        // Already showing (the service restarted mid-warning): don't post it, or ring, again.
-        if (manager.activeNotifications.any { it.id == idOf(occurrence.schedule.id) }) return
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL, "Wind-down warning", NotificationManager.IMPORTANCE_DEFAULT).apply {
                 description = "A heads-up before a bedtime block starts"
@@ -43,6 +41,8 @@ object Warnings {
             .setContentText("$apps will be blocked. Time to wind down.")
             .setContentIntent(open)
             .setAutoCancel(true)
+            // Posted again while still showing (the service restarted mid-warning): update it silently.
+            .setOnlyAlertOnce(true)
             // Gone once the block starts; it has said what it needed to.
             .setTimeoutAfter(untilStart.coerceAtLeast(1))
             .build()

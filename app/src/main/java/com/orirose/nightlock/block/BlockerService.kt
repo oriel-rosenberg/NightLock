@@ -23,7 +23,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,6 +45,9 @@ class BlockerService : AccessibilityService() {
 
     /** [rules] hold until this moment (the next schedule change); null means until the config changes. */
     private var rulesValidUntil: LocalDateTime? = null
+
+    /** When [rules] were worked out; the wall clock going back past it (clocks going back) means work them out again. */
+    private var rulesComputedAt: LocalDateTime = LocalDateTime.MIN
 
     /**
      * Window id → package. Reading a window's package means a call into that app, which can stall
@@ -93,8 +97,12 @@ class BlockerService : AccessibilityService() {
         scope.launch {
             essentials = withContext(Dispatchers.Default) { Essentials.detect(this@BlockerService) }
             configRepository.config
-                // An unreadable settings file keeps the last good config rather than stopping the service.
-                .catch { Log.e(LOG_TAG, "Couldn't read settings", it) }
+                // A failed read keeps the last good config and tries again, waiting longer each time.
+                .retryWhen { cause, attempt ->
+                    Log.e(LOG_TAG, "Couldn't read settings; retrying", cause)
+                    delay(SETTINGS_RETRY_MS * (attempt + 1).coerceAtMost(12))
+                    true
+                }
                 .collect {
                     config = it
                     onClock()
@@ -104,7 +112,7 @@ class BlockerService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val now = LocalDateTime.now()
-        if (rulesValidUntil?.let { now >= it } == true) refreshRules(now)
+        if (rulesValidUntil?.let { now >= it } == true || now < rulesComputedAt) refreshRules(now)
         if (!rules.active) return
         // The event's own package is checked first: the window list can lag a little behind it.
         val eventPackage = event.packageName?.toString()?.takeIf {
@@ -118,6 +126,7 @@ class BlockerService : AccessibilityService() {
         val known = essentials ?: return
         rules = BlockRules.from(config, known, now)
         rulesValidUntil = config.nextChangeAfter(now)
+        rulesComputedAt = now
     }
 
     private fun onClock() {
@@ -159,10 +168,13 @@ class BlockerService : AccessibilityService() {
         handler.removeCallbacks(clockTick)
         val next = config.nextChangeAfter(now) ?: return
         val zone = ZoneId.systemDefault()
-        // A time that doesn't exist (skipped when clocks go forward) happens the moment the clock jumps.
-        val gap = zone.rules.getTransition(next)?.takeIf { it.isGap }
-        val at = gap?.instant ?: next.atZone(zone).toInstant()
-        handler.postDelayed(clockTick, (at.toEpochMilli() - System.currentTimeMillis()).coerceAtLeast(MIN_TICK_MS))
+        val nowMs = System.currentTimeMillis()
+        // A wall-clock time can happen once, twice (the hour repeated when clocks go back: take the first
+        // one still ahead) or never (skipped when clocks go forward: it happens the moment the clock jumps).
+        val at = zone.rules.getValidOffsets(next).map { next.toInstant(it).toEpochMilli() }.filter { it > nowMs }.minOrNull()
+            ?: zone.rules.getTransition(next)?.takeIf { it.isGap }?.instant?.toEpochMilli()
+            ?: return
+        handler.postDelayed(clockTick, (at - nowMs).coerceAtLeast(MIN_TICK_MS))
     }
 
     /** A blocked app with a window on screen now, counting both halves of split screen and pop-ups. */
@@ -225,6 +237,7 @@ class BlockerService : AccessibilityService() {
     companion object {
         private const val RECHECK_DELAY_MS = 1500L
         private const val MIN_TICK_MS = 500L
+        private const val SETTINGS_RETRY_MS = 5_000L
 
         private val _running = MutableStateFlow(false)
 

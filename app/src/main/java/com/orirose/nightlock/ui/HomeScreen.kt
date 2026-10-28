@@ -99,7 +99,12 @@ fun HomeScreen(
                 Text("Schedules", style = MaterialTheme.typography.titleMedium)
                 if (config.schedules.isEmpty()) Text("None yet.")
                 config.schedules.forEach { schedule ->
-                    ScheduleRow(schedule, onEnabled = { onScheduleEnabled(schedule.id, it) }, onClick = { onEditSchedule(schedule) })
+                    ScheduleRow(
+                        schedule,
+                        hasApps = config.appsOf(schedule).isNotEmpty(),
+                        onEnabled = { onScheduleEnabled(schedule.id, it) },
+                        onClick = { onEditSchedule(schedule) },
+                    )
                 }
                 OutlinedButton(onClick = onAddSchedule) { Text("Add schedule") }
             }
@@ -164,7 +169,7 @@ fun blockDescription(config: Config, now: LocalDateTime, context: android.conten
 }
 
 @Composable
-private fun ScheduleRow(schedule: Schedule, onEnabled: (Boolean) -> Unit, onClick: () -> Unit) {
+private fun ScheduleRow(schedule: Schedule, hasApps: Boolean, onEnabled: (Boolean) -> Unit, onClick: () -> Unit) {
     val context = LocalContext.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -178,6 +183,9 @@ private fun ScheduleRow(schedule: Schedule, onEnabled: (Boolean) -> Unit, onClic
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (!hasApps) {
+                Text("No apps to block, so it won't run", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
         }
         Switch(checked = schedule.enabled, onCheckedChange = onEnabled)
     }
