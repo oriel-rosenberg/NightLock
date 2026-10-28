@@ -11,9 +11,11 @@ import java.time.format.TextStyle
 import java.time.temporal.WeekFields
 import java.util.Locale
 
+// The app is in English, so names (days, AM/PM) are too, even on a phone set to another language.
+
 /** A clock time in the phone's 12/24-hour setting. */
 fun Context.formatTime(time: LocalTime): String =
-    time.format(DateTimeFormatter.ofPattern(if (DateFormat.is24HourFormat(this)) "HH:mm" else "h:mm a"))
+    time.format(DateTimeFormatter.ofPattern(if (DateFormat.is24HourFormat(this)) "HH:mm" else "h:mm a", Locale.ENGLISH))
 
 fun Context.formatMinuteOfDay(minute: Int): String = formatTime(LocalTime.of(minute / 60, minute % 60))
 
@@ -39,9 +41,9 @@ fun formatDuration(duration: Duration): String {
 }
 
 fun dayName(isoDay: Int, style: TextStyle = TextStyle.SHORT): String =
-    DayOfWeek.of(isoDay).getDisplayName(style, Locale.getDefault())
+    DayOfWeek.of(isoDay).getDisplayName(style, Locale.ENGLISH)
 
-/** ISO day numbers in the order this locale's week runs (Sunday first in Israel and the US). */
+/** ISO day numbers in the order the phone's region runs its week (Sunday first in Israel and the US). */
 fun weekOrder(): List<Int> {
     val first = WeekFields.of(Locale.getDefault()).firstDayOfWeek.value
     return (0 until 7).map { (first - 1 + it) % 7 + 1 }

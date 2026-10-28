@@ -6,7 +6,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -35,6 +39,7 @@ import com.orirose.nightlock.ui.UnlockScreen
 import com.orirose.nightlock.ui.enableNightEdgeToEdge
 import com.orirose.nightlock.ui.rememberNow
 import com.orirose.nightlock.ui.rememberSetupState
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.serialization.json.Json
 
 class MainActivity : ComponentActivity() {
@@ -42,7 +47,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableNightEdgeToEdge()
         setContent {
-            NightLockTheme { NightLockRoot() }
+            NightLockTheme {
+                val vm: MainViewModel = viewModel()
+                // Messages show in full at the bottom; a new one replaces the one showing.
+                val messages = remember { SnackbarHostState() }
+                LaunchedEffect(vm) {
+                    vm.messages.collectLatest { messages.showSnackbar(it, withDismissAction = true, duration = SnackbarDuration.Long) }
+                }
+                Box(Modifier.fillMaxSize()) {
+                    NightLockRoot(vm)
+                    SnackbarHost(messages, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+                }
+            }
         }
     }
 }
@@ -56,7 +72,7 @@ private val draftSaver = Saver<MutableState<Schedule?>, String>(
 )
 
 @Composable
-private fun NightLockRoot(vm: MainViewModel = viewModel()) {
+private fun NightLockRoot(vm: MainViewModel) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
     var draft by rememberSaveable(saver = draftSaver) { mutableStateOf<Schedule?>(null) }
     val config by vm.config.collectAsStateWithLifecycle()
@@ -117,6 +133,7 @@ private fun NightLockRoot(vm: MainViewModel = viewModel()) {
             onEditSchedule = ::openEditor,
             onAddSchedule = { openEditor(Schedule()) },
             onUnlockWait = vm::setUnlockWait,
+            onWaitPause = vm::setWaitPause,
             onCancelPending = vm::cancelPending,
             onOpenBlockList = { screen = Screen.BlockList },
             onOpenAllowlist = { screen = Screen.Allowlist },
@@ -133,12 +150,17 @@ private fun NightLockRoot(vm: MainViewModel = viewModel()) {
             }
             UnlockScreen(
                 waitMinutes = cfg.unlockWaitMinutes,
+                waitPauseMinutes = cfg.waitPauseMinutes,
                 restLabel = restLabel,
-                onPauseShort = {
-                    vm.pauseShort()
+                onWaited = {
+                    vm.pauseAfterWaiting()
                     screen = Screen.Home
                 },
-                onPauseRest = {
+                onTypedPauseShort = {
+                    vm.pauseAfterTyping()
+                    screen = Screen.Home
+                },
+                onTypedPauseRest = {
                     vm.pauseRestOfBlock()
                     screen = Screen.Home
                 },

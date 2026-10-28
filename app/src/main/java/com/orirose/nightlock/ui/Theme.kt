@@ -6,7 +6,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 
 // Always dark: this app is used at bedtime.
 private val NightColors = darkColorScheme(
@@ -34,9 +37,12 @@ private val NightColors = darkColorScheme(
     outlineVariant = Color(0xFF47464F),
 )
 
+/** Always left to right: the app is in English, even on a phone set to Hebrew (Compose ignores supportsRtl). */
 @Composable
 fun NightLockTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = NightColors, content = content)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        MaterialTheme(colorScheme = NightColors, content = content)
+    }
 }
 
 /** Edge-to-edge with light bar icons and no scrim, even when the phone itself is in light mode. */

@@ -1,7 +1,6 @@
 package com.orirose.nightlock.ui
 
 import android.app.Application
-import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.orirose.nightlock.Durations
@@ -17,8 +16,11 @@ import com.orirose.nightlock.formatWhen
 import java.time.Duration
 import java.time.LocalDateTime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
@@ -29,7 +31,8 @@ import kotlinx.coroutines.withContext
 /**
  * All changes to the settings go through here, and here strict mode is enforced:
  * - a change that makes NightLock stricter applies at once;
- * - one that makes it easier is refused during a block (paused or not), and otherwise waits 24 hours;
+ * - one that makes it easier is refused during a block (paused or not), and otherwise waits 24 hours,
+ *   except switching off or deleting a whole schedule, which applies at once outside a block;
  * - undoing a waiting change, which is stricter, always works.
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -100,35 +103,60 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Deleting a schedule applies at once (no 24-hour wait, by the user's choice), but not during a block.
+     * Its waiting changes go with it.
+     */
     fun deleteSchedule(id: String) = change { config, now ->
         val old = config.schedules.firstOrNull { it.id == id } ?: return@change Outcome(config)
-        val withoutWaiting = config.copy(pending = config.pending.filterNot { it.scheduleId == id })
-        // A schedule that never runs blocks nothing, so deleting it isn't easier.
-        if (!old.enabled || !old.isValid) Outcome(withoutWaiting.copy(schedules = config.schedules - old))
-        else easier(withoutWaiting, now, Pending(applyAt = cooldownEnd(now), deleteSchedule = id))
+        if (config.isBlockTime(now) && old.enabled && old.isValid) return@change Outcome(config, LOCKED)
+        Outcome(config.copy(schedules = config.schedules - old, pending = config.pending.filterNot { it.scheduleId == id }))
     }
 
-    fun setScheduleEnabled(id: String, enabled: Boolean) {
-        val schedule = config.value?.schedules?.firstOrNull { it.id == id } ?: return
-        saveSchedule(schedule.copy(enabled = enabled))
+    /**
+     * Switching a schedule on applies at once (stricter). Switching it off also applies at once (no 24-hour
+     * wait, by the user's choice), but not during a block; its waiting changes are dropped so none of them
+     * switches it back on later.
+     */
+    fun setScheduleEnabled(id: String, enabled: Boolean) = change { config, now ->
+        val old = config.schedules.firstOrNull { it.id == id } ?: return@change Outcome(config)
+        if (!enabled && config.isBlockTime(now) && old.enabled) return@change Outcome(config, LOCKED)
+        val updated = config.schedules.map { if (it.id == id) it.copy(enabled = enabled) else it }
+        val pending = if (enabled) config.pending else config.pending.filterNot { it.scheduleId == id }
+        Outcome(config.copy(schedules = updated, pending = pending))
     }
 
+    /** Unlock by waiting, X: a longer wait is stricter. */
     fun setUnlockWait(minutes: Int) = change { config, now ->
         val withoutWaiting = config.copy(pending = config.pending.filter { it.unlockWaitMinutes == null })
         if (minutes >= config.unlockWaitMinutes) Outcome(withoutWaiting.copy(unlockWaitMinutes = minutes))
         else easier(withoutWaiting, now, Pending(applyAt = cooldownEnd(now), unlockWaitMinutes = minutes))
     }
 
+    /** Unlock by waiting, Y: a shorter pause is stricter. */
+    fun setWaitPause(minutes: Int) = change { config, now ->
+        val withoutWaiting = config.copy(pending = config.pending.filter { it.waitPauseMinutes == null })
+        if (minutes <= config.waitPauseMinutes) Outcome(withoutWaiting.copy(waitPauseMinutes = minutes))
+        else easier(withoutWaiting, now, Pending(applyAt = cooldownEnd(now), waitPauseMinutes = minutes))
+    }
+
     /** Calling off a waiting change keeps things as strict as they are, so it always works. */
     fun cancelPending(change: Pending) = change { config, _ -> Outcome(config.copy(pending = config.pending - change), "Cancelled.") }
 
+    /** After typing the text: a [Durations.PAUSE_MINUTES]-minute pause. */
+    fun pauseAfterTyping() = pause { Durations.PAUSE_MINUTES }
+
+    /** After waiting it out: a pause of the length set for the wait path. */
+    fun pauseAfterWaiting() = pause { it.waitPauseMinutes }
+
     /**
-     * After the unlock screen: blocking stops for [Durations.PAUSE_MINUTES] minutes, or until the block
-     * ends if that's sooner, so the pause can't carry over into the next block.
+     * Blocking stops for [minutesOf] the saved config, or until the block ends if that's sooner, so the pause
+     * can't carry over into the next block.
      */
-    fun pauseShort() = change { config, now ->
-        if (!config.isBlockTime(now)) return@change Outcome(config)
-        val short = now.plus(Duration.ofMillis(Durations.minutes(Durations.PAUSE_MINUTES)))
+    private fun pause(minutesOf: (Config) -> Int) = change { config, now ->
+        // Only while actually blocking: never stacks onto, or replaces, a pause already running.
+        if (!config.isBlocking(now)) return@change Outcome(config)
+        val short = now.plus(Duration.ofMillis(Durations.minutes(minutesOf(config))))
         val until = config.blockEndsAt(now)?.let { minOf(it, short) } ?: short
         Outcome(config.copy(pausedUntil = until), after = { Pauses.show(getApplication(), until) })
     }
@@ -157,13 +185,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** A change that makes NightLock easier: refused during a block, otherwise queued for 24 hours. */
     private fun easier(config: Config, now: LocalDateTime, waiting: Pending): Outcome =
         if (config.isBlockTime(now)) {
-            Outcome(config, "Locked while a block is on. Unlock doesn't change settings either.")
+            Outcome(config, LOCKED)
         } else {
             val whenText = getApplication<Application>().formatWhen(waiting.applyAt, now)
             Outcome(config.copy(pending = config.pending + waiting), "That makes NightLock easier, so it applies in 24 h ($whenText).")
         }
 
     private class Outcome(val config: Config, val message: String? = null, val after: (() -> Unit)? = null)
+
+    private companion object {
+        const val LOCKED = "Locked while a block is on. Unlocking doesn't change settings either."
+    }
+
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+
+    /** Short messages for the user, shown at the bottom of the screen in full (toasts cut off after 2 lines). */
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
 
     /** Runs [decide] on the latest saved config in one atomic step, then shows its message. */
     private fun change(decide: (Config, LocalDateTime) -> Outcome) {
@@ -173,7 +210,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 decide(config, LocalDateTime.now()).also { outcome = it }.config
             }
             outcome?.after?.invoke()
-            outcome?.message?.let { Toast.makeText(getApplication(), it, Toast.LENGTH_LONG).show() }
+            outcome?.message?.let { _messages.tryEmit(it) }
         }
     }
 }

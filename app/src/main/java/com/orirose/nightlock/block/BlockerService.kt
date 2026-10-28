@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
@@ -70,6 +71,9 @@ class BlockerService : AccessibilityService() {
         }
     }
     private var recheckPending = false
+
+    private var lastLogged: String? = null
+    private var lastLoggedAt = 0L
 
     /** Fires at the next schedule change: a block starting or ending, or a warning. */
     private val clockTick = Runnable { onClock() }
@@ -210,7 +214,13 @@ class BlockerService : AccessibilityService() {
             Log.i(LOG_TAG, "$packageName is not blocked after re-checking; leaving it")
             return
         }
-        Log.i(LOG_TAG, "Blocked $packageName")
+        // One opening of an app fires several window events; log it once.
+        val nowMs = SystemClock.elapsedRealtime()
+        if (packageName != lastLogged || nowMs - lastLoggedAt > LOG_REPEAT_MS) {
+            Log.i(LOG_TAG, "Blocked $packageName")
+            lastLogged = packageName
+            lastLoggedAt = nowMs
+        }
         startActivity(
             Intent(this, BlockActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -243,6 +253,7 @@ class BlockerService : AccessibilityService() {
         private const val RECHECK_DELAY_MS = 1500L
         private const val MIN_TICK_MS = 500L
         private const val SETTINGS_RETRY_MS = 5_000L
+        private const val LOG_REPEAT_MS = 2_000L
 
         private val _running = MutableStateFlow(false)
 

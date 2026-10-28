@@ -22,12 +22,13 @@
         android:name="android.permission.INTERNET"
         tools:node="remove" />
 
+    <!-- supportsRtl is off: the app is in English, so it stays left to right on a Hebrew phone too. -->
     <application
         android:name=".NightLockApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:supportsRtl="true"
+        android:supportsRtl="false"
         android:theme="@style/Theme.NightLock">
 
         <activity

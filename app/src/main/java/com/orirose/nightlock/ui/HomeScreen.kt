@@ -41,6 +41,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 
 private val WAIT_CHOICES = listOf(1, 2, 3, 5, 10, 15, 30)
+private val WAIT_PAUSE_CHOICES = listOf(5, 10, 15, 20, 30, 45, 60)
 
 @Composable
 fun HomeScreen(
@@ -57,6 +58,7 @@ fun HomeScreen(
     onEditSchedule: (Schedule) -> Unit,
     onAddSchedule: () -> Unit,
     onUnlockWait: (Int) -> Unit,
+    onWaitPause: (Int) -> Unit,
     onCancelPending: (Pending) -> Unit,
     onOpenBlockList: () -> Unit,
     onOpenAllowlist: () -> Unit,
@@ -145,12 +147,15 @@ fun HomeScreen(
             }
 
             SectionCard {
-                Text("Unlock wait", style = MaterialTheme.typography.titleMedium)
+                Text("Unlock by waiting", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "How long the unlock screen makes you wait before the text appears. Longer applies at once; shorter takes 24 hours.",
+                    "Wait ${config.unlockWaitMinutes} ${Durations.minuteUnit} on the unlock screen to pause blocking for " +
+                        "${config.waitPauseMinutes} ${Durations.minuteUnit}. A longer wait or a shorter pause applies at once; " +
+                        "the other way round takes 24 hours.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Text("Wait (${Durations.minuteUnit})", style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     WAIT_CHOICES.forEach { minutes ->
                         Toggle("$minutes", selected = config.unlockWaitMinutes == minutes, modifier = Modifier.weight(1f)) {
@@ -158,7 +163,14 @@ fun HomeScreen(
                         }
                     }
                 }
-                Text("${config.unlockWaitMinutes} ${Durations.minuteUnit}", style = MaterialTheme.typography.bodySmall)
+                Text("Pause it earns (${Durations.minuteUnit})", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    WAIT_PAUSE_CHOICES.forEach { minutes ->
+                        Toggle("$minutes", selected = config.waitPauseMinutes == minutes, modifier = Modifier.weight(1f)) {
+                            onWaitPause(minutes)
+                        }
+                    }
+                }
             }
 
             SectionCard {
@@ -219,6 +231,7 @@ private fun describe(change: Pending, config: Config, labelOf: (String) -> Strin
         change.deleteSchedule != null -> "Delete $scheduleName"
         change.schedule != null -> if (!change.schedule.enabled) "Switch off $scheduleName" else "Change $scheduleName"
         change.unlockWaitMinutes != null -> "Unlock wait: ${change.unlockWaitMinutes} ${Durations.minuteUnit}"
+        change.waitPauseMinutes != null -> "Pause after waiting: ${change.waitPauseMinutes} ${Durations.minuteUnit}"
         else -> "Change"
     }
 }

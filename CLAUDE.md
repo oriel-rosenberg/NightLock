@@ -19,8 +19,7 @@ README.md has the milestone plan, the permissions table, adb commands and the co
   files, and deal with what it finds.
 - Raise `versionCode` in `app/build.gradle.kts` for every APK handed to the user.
 - No network access ever: no INTERNET permission (the manifest strips it), no library that needs it.
-- The accessibility service reads only which package each window belongs to. Milestone 4 may also read
-  window titles / class names of the Settings app, and nothing else. Never read text, view IDs or input
+- The accessibility service reads only which package each window belongs to. Never read text, view IDs or input
   from other apps; never add gestures, key events, screenshots or text-change events. `SecurityTest`
   enforces the accessibility config and scans the code for content-reading calls; the `securityCheckReleaseManifest`
   task in `app/build.gradle.kts` enforces the merged manifest's permissions, exported components and
@@ -33,5 +32,6 @@ README.md has the milestone plan, the permissions table, adb commands and the co
   polling, no periodic watchdog, no alarms, no boot receiver). Work blocking state out from the clock on
   demand; the only timer is the service's handler for the next schedule change, which runs only while the
   phone is awake, with screen-on and time-change broadcasts re-checking the clock.
-- No device admin / uninstall protection; the user chose an "Are you sure?" step instead (milestone 4).
+- No device admin, uninstall protection, or hiding of Settings pages: NightLock can always be switched off in
+  Settings → Accessibility and uninstalled normally.
 - Every user-visible duration goes through TEST_MODE scaling once durations exist (milestone 2 onwards).

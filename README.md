@@ -3,17 +3,21 @@
 A personal Android app blocker for bedtime. It's sideloaded on one Samsung Galaxy and isn't meant for the Play Store.
 Kotlin, Jetpack Compose, minSdk 26, targetSdk 37. No network permission.
 
-## Status: milestone 3 of 4
+## Status: version 0.3.1
 
 | # | Milestone | State |
 |---|-----------|-------|
 | 1 | Block list, "Block now" switch, accessibility blocking, block screen | done |
 | 2 | **Runs on its own:** schedules (crossing midnight), wind-down warning, survives reboots, setup checklist (incl. Samsung battery steps) | done |
-| 3 | **Hard to give in:** unlock (wait + 25-letter text → 30-minute pause or rest of the block), strict mode with a 24 h wait for easier changes | **this build** |
-| 4 | **Hard to escape:** blocking the Accessibility, Usage access and Date & time pages in Settings; an "Are you sure?" step when NightLock's App info page (Uninstall, Force stop) is opened during a block; clock-tampering detection; a simple log and stats | next |
+| 3 | **Hard to give in:** unlock by waiting or by typing, strict mode with a 24 h wait for easier changes | done; 0.3.1 has the fixes from testing on the phone |
+| 4 | A simple log and stats | optional, not started |
 
-Milestone 3 follows the user's own design rather than the original spec: the same wait every time (no
-escalation, no nightly cap), and "Rest of this block" in place of a separate emergency unlock.
+Milestone 3 follows the user's own design rather than the original spec: two unlock paths, the same cost every
+time (no escalation, no nightly cap), and "Rest of this block" in place of a separate emergency unlock.
+
+**Not planned:** hiding Settings pages so NightLock can't be switched off, guarding its App info page, and
+clock-tampering detection (the original milestone 4). Turning off the NightLock blocker in Settings →
+Accessibility always works; it's a deliberate trip into Settings rather than a quick tap.
 
 **Low power by design.** Nothing runs between screen changes: no foreground service, no polling, no
 watchdog, no alarms. Whether a block is on is worked out from the clock each time the screen changes. While
@@ -24,12 +28,7 @@ reboot by itself, so no "start at boot" permission is needed either. The trade-o
 accessibility service, nothing blocks until it restarts. The Samsung battery steps in the setup checklist make
 that unlikely.
 
-No uninstall protection: NightLock is not a device admin, so it can always be uninstalled normally. The
-"Are you sure?" step only adds a pause before that.
-
-The original plan had 6 milestones; they're grouped by what you test together. The onboarding checklist moved
-into 2 because that's when the permissions it checks are added. The emergency unlock comes in 3, before
-milestone 4 makes NightLock hard to switch off.
+No uninstall protection: NightLock is not a device admin, so it can always be uninstalled normally.
 
 ## Build
 
@@ -186,34 +185,41 @@ Schedules that touch (one ends at 07:00, another starts at 07:00) count as one b
 the final end time. When a block ends while the block screen is up, it closes by itself.
 
 **Unlocking.** The block screen has no unlock button on purpose: it only says unlocking is done in NightLock.
-In NightLock, **Unlock…** shows a countdown (the unlock wait, 3 min by default) that starts over if you leave the
-screen or let it turn off. Then it shows 25 random upper- and lower-case letters to type: no pasting, and a typo
-gives you a new text. Then you choose **Pause 30 min** or **Rest of this block** (or switching Block now off). A
-countdown notification shows while a pause runs, and blocking comes back by itself when it ends. **End pause now**
-on the home screen re-blocks early. Every unlock costs the same.
+In NightLock, **Unlock…** offers two paths:
+- **Wait it out:** stay on the screen for X minutes (3 by default) and blocking pauses for Y minutes (15 by default)
+  by itself. The wait starts over if you leave the screen or let it turn off.
+- **Type a text:** type 25 random upper- and lower-case letters straight away: no pasting, and a typo gives you a
+  new text. Then choose **Pause 30 min** or **Rest of this block** (or switching Block now off).
+
+X and Y are set on the home screen under **Unlock by waiting**. A countdown notification shows while a pause runs,
+and blocking comes back by itself when it ends. **End pause now** on the home screen re-blocks early. Every unlock
+costs the same.
 
 **Strict mode.** A change that makes NightLock stricter applies at once: more apps, more days, a longer window, a
-longer unlock wait, removing an app from the allowlist, a new schedule. A change that makes it easier (unticking an app,
-allowing an app, a shorter or switched-off or deleted schedule, a shorter wait) is refused while a block is on, even
-during a pause. Any other time it's queued for 24 hours, listed under **Waiting 24 hours** on the home screen,
-where it can be cancelled. A queued change whose 24 hours run out during a block waits for that block to end.
-Block now can only be switched off through Unlock. A 30-minute pause never runs past the end of its block, and
-"Rest of this block" lasts at most a day.
+longer wait or a shorter pause on the wait path, removing an app from the allowlist, a new schedule. A change that
+makes it easier (unticking an app, allowing an app, a shorter schedule, a shorter wait or a longer pause) is refused
+while a block is on, even during a pause. Any other time it's queued for 24 hours, listed under **Waiting 24 hours**
+on the home screen, where it can be cancelled. A queued change whose 24 hours run out during a block waits for that
+block to end. **Switching a schedule off or deleting it applies at once** outside a block (no 24-hour wait, by
+choice); during a block it's refused too. Block now can only be switched off through Unlock. A pause never runs
+past the end of its block, and "Rest of this block" lasts at most a day.
 
-## Testing milestone 3
+## Testing 0.3.1
 
 Quickest with a TEST_MODE build (`.\build.cmd assembleRelease "-Pnightlock.testMode=true"`): waits are seconds and
 the 24 hours is one minute. Then reinstall a normal build for real use.
 
-1. With a block on, open a blocked app: the block screen says to unlock in NightLock and has no unlock button.
-2. NightLock → **Unlock…**: the countdown runs. Press Home and come back: it starts over.
-3. Let it finish, type the text. Make a typo on purpose: a new text appears. Paste doesn't work.
-4. **Pause 30 min**: the blocked app opens; a countdown notification shows. When it ends, the block is back.
-5. Unlock again → **Rest of this block**: free until the schedule's end time.
-6. During a block, try to untick an app, switch off or shorten a schedule, or shorten the unlock wait: each is refused.
-   Adding an app or a schedule works.
-7. Outside a block, untick an app: it shows *Unblocks …* and appears under **Waiting 24 hours**. Cancel one, let another
-   apply.
+1. The app reads left to right on the Hebrew phone.
+2. With a block on, open a blocked app: the block screen says to unlock in NightLock and has no unlock button.
+3. NightLock → **Unlock…** → **Start waiting**: the countdown runs; press Home and come back: it starts over. Start it
+   again, turn the screen off for longer than the wait, and come back: no pause was granted. Then let it finish on
+   screen: the pause starts by itself and you're back on the home screen.
+4. **Unlock…** → **Type the text**: no wait. Make a typo on purpose: a new text appears. Paste doesn't work. Then
+   **Pause 30 min**, or **Rest of this block**.
+5. During a pause a countdown notification shows; when it ends, the block is back.
+6. During a block, try to untick an app, switch off or shorten a schedule: each is refused, and the message at the
+   bottom shows in full. Adding an app or a schedule works.
+7. Outside a block, switch a schedule off: it applies at once. Untick an app: it appears under **Waiting 24 hours**.
 
 ## Testing milestone 2
 
@@ -232,12 +238,12 @@ the 24 hours is one minute. Then reinstall a normal build for real use.
 
 ## Known gaps in this build
 
-These are fixed in later milestones or accepted as limitations:
+Accepted limitations:
 
-- **Accessibility settings are still a way out.** Turning off the NightLock blocker in Settings → Accessibility, or
-  force-stopping the app, ends blocking. Milestone 4 covers those pages during a block.
+- **Settings is a way out.** Turning off the NightLock blocker in Settings → Accessibility, or force-stopping the app,
+  ends blocking. Not planned to change.
 - **Changing the phone's clock** moves the schedules with it, ends a pause early or late, and can run out the 24-hour
-  wait for easier changes. Clock-tampering detection (and blocking the Date & time page) comes in milestone 4.
+  wait for easier changes.
 - **No fallback** if the accessibility service gets killed. This is deliberate, to save battery (see *Low power by design*).
 - **Picture-in-picture** windows of blocked apps are left alone. Covering them would trap you on the block screen, because
   PiP floats above it. Opening the PiP window to full size is blocked as normal.

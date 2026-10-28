@@ -22,8 +22,10 @@ data class Config(
     /** The "Block now" switch. */
     val manualBlock: Boolean = false,
     val schedules: List<Schedule> = emptyList(),
-    /** How long the unlock screen makes you wait before the text appears, in minutes (seconds in TEST_MODE). */
+    /** Unlock by waiting: how long to wait on the unlock screen, in minutes (seconds in TEST_MODE). */
     val unlockWaitMinutes: Int = 3,
+    /** Unlock by waiting: how long the pause it earns lasts, in minutes (seconds in TEST_MODE). */
+    val waitPauseMinutes: Int = 15,
     /** While a pause runs, nothing is blocked until this moment; null when not paused. */
     @Serializable(with = LocalDateTimeSerializer::class)
     val pausedUntil: LocalDateTime? = null,
@@ -122,6 +124,7 @@ data class Config(
         change.schedule != null -> copy(schedules = schedules.map { if (it.id == change.schedule.id) change.schedule else it })
         change.deleteSchedule != null -> copy(schedules = schedules.filterNot { it.id == change.deleteSchedule })
         change.unlockWaitMinutes != null -> copy(unlockWaitMinutes = change.unlockWaitMinutes)
+        change.waitPauseMinutes != null -> copy(waitPauseMinutes = change.waitPauseMinutes)
         else -> this
     }
 }
@@ -143,6 +146,7 @@ data class Pending(
     /** Delete the schedule with this id. */
     val deleteSchedule: String? = null,
     val unlockWaitMinutes: Int? = null,
+    val waitPauseMinutes: Int? = null,
 ) {
     val scheduleId: String? get() = schedule?.id ?: deleteSchedule
 }
@@ -158,10 +162,15 @@ class ConfigRepository(private val context: Context) {
 
     val config: Flow<Config> = context.dataStore.data.map { decode(it[CONFIG_KEY]) }
 
-    /** Changes the config in one atomic step, so [transform] always sees the latest saved version. */
+    /**
+     * Changes the config in one atomic step, so [transform] always sees the latest saved version. Nothing is
+     * written (and nobody is told) when the config comes back unchanged.
+     */
     suspend fun update(transform: (Config) -> Config) {
         context.dataStore.edit { prefs ->
-            prefs[CONFIG_KEY] = json.encodeToString(Config.serializer(), transform(decode(prefs[CONFIG_KEY])))
+            val old = decode(prefs[CONFIG_KEY])
+            val new = transform(old)
+            if (new != old) prefs[CONFIG_KEY] = json.encodeToString(Config.serializer(), new)
         }
     }
 
