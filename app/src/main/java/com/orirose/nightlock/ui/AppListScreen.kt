@@ -37,6 +37,7 @@ import com.orirose.nightlock.data.AppEntry
  * A searchable list of apps with a checkbox each. Used for both the block list and the allowlist.
  *
  * @param disabledReason why an app can't be toggled here (shown in place of its package name), or null.
+ * @param note something to show about an app that can still be toggled, e.g. a change waiting 24 hours.
  */
 @Composable
 fun AppListScreen(
@@ -47,6 +48,7 @@ fun AppListScreen(
     disabledReason: (String) -> String?,
     onToggle: (packageName: String, checked: Boolean) -> Unit,
     onBack: () -> Unit,
+    note: (String) -> String? = { null },
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     Surface(Modifier.fillMaxSize()) {
@@ -77,7 +79,7 @@ fun AppListScreen(
                 }
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(shown, key = { it.packageName }) { app ->
-                        AppRow(app, checked = app.packageName in selected, disabledReason(app.packageName)) { checked ->
+                        AppRow(app, checked = app.packageName in selected, disabledReason(app.packageName), note(app.packageName)) { checked ->
                             onToggle(app.packageName, checked)
                         }
                     }
@@ -88,7 +90,7 @@ fun AppListScreen(
 }
 
 @Composable
-private fun AppRow(app: AppEntry, checked: Boolean, disabledReason: String?, onToggle: (Boolean) -> Unit) {
+private fun AppRow(app: AppEntry, checked: Boolean, disabledReason: String?, note: String?, onToggle: (Boolean) -> Unit) {
     val enabled = disabledReason == null
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -102,9 +104,9 @@ private fun AppRow(app: AppEntry, checked: Boolean, disabledReason: String?, onT
         Column(Modifier.weight(1f)) {
             Text(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                disabledReason ?: app.packageName,
+                disabledReason ?: note ?: app.packageName,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                color = if (enabled && note == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

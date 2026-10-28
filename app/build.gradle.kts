@@ -28,8 +28,8 @@ android {
         applicationId = "com.orirose.nightlock"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.2.0"
+        versionCode = 5
+        versionName = "0.3.0"
 
         buildConfigField("boolean", "TEST_MODE", testMode.toString())
         resValue("string", "app_name", if (testMode) "NightLock TEST" else "NightLock")

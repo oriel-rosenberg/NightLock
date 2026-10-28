@@ -12,11 +12,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.orirose.nightlock.block.BlockerService
@@ -27,6 +31,7 @@ import com.orirose.nightlock.ui.HomeScreen
 import com.orirose.nightlock.ui.MainViewModel
 import com.orirose.nightlock.ui.NightLockTheme
 import com.orirose.nightlock.ui.ScheduleScreen
+import com.orirose.nightlock.ui.UnlockScreen
 import com.orirose.nightlock.ui.enableNightEdgeToEdge
 import com.orirose.nightlock.ui.rememberNow
 import com.orirose.nightlock.ui.rememberSetupState
@@ -42,7 +47,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Home, BlockList, Allowlist, Checklist, Schedule, ScheduleApps }
+private enum class Screen { Home, BlockList, Allowlist, Checklist, Schedule, ScheduleApps, Unlock }
 
 /** Keeps an unsaved schedule across rotation and process death, as JSON. */
 private val draftSaver = Saver<MutableState<Schedule?>, String>(
@@ -70,10 +75,17 @@ private fun NightLockRoot(vm: MainViewModel = viewModel()) {
     val allowlist = cfg.allowlist(ess)
     val blocked = cfg.blockedPackages - allowlist
     val editing = draft
+    val context = LocalContext.current
+    val labels = remember(apps) { apps?.associate { it.packageName to it.label } ?: emptyMap() }
+    fun labelOf(packageName: String) = labels[packageName] ?: packageName
 
-    // The allowlist closes as soon as a block starts, even if it was open; the editor needs a draft.
+    // Changes whose 24 hours are up apply when NightLock comes to the front (the blocker applies them too).
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.applyDueChanges(ess) }
+
+    // The allowlist closes as soon as a block starts; unlocking makes sense only while blocking; the editor needs a draft.
     val current = when {
-        screen == Screen.Allowlist && cfg.isBlocking(now) -> Screen.Home
+        screen == Screen.Allowlist && cfg.isBlockTime(now) -> Screen.Home
+        screen == Screen.Unlock && !cfg.isBlocking(now) -> Screen.Home
         (screen == Screen.Schedule || screen == Screen.ScheduleApps) && editing == null -> Screen.Home
         else -> screen
     }
@@ -97,31 +109,66 @@ private fun NightLockRoot(vm: MainViewModel = viewModel()) {
             blockedCount = blocked.size,
             allowedCount = apps?.count { it.packageName in allowlist },
             setup = setup,
+            labelOf = ::labelOf,
             onManualBlock = vm::setManualBlock,
+            onUnlock = { screen = Screen.Unlock },
+            onEndPause = vm::endPause,
             onScheduleEnabled = vm::setScheduleEnabled,
             onEditSchedule = ::openEditor,
             onAddSchedule = { openEditor(Schedule()) },
+            onUnlockWait = vm::setUnlockWait,
+            onCancelPending = vm::cancelPending,
             onOpenBlockList = { screen = Screen.BlockList },
             onOpenAllowlist = { screen = Screen.Allowlist },
             onOpenChecklist = { screen = Screen.Checklist },
         )
+        Screen.Unlock -> {
+            val withoutManual = cfg.copy(manualBlock = false)
+            val restEnd = withoutManual.blockEndsAt(now)
+            val restLabel = when {
+                cfg.manualBlocking && restEnd != null -> "Block now off, and pause the rest until ${context.formatWhen(restEnd, now)}"
+                cfg.manualBlocking -> "Switch Block now off"
+                restEnd != null -> "Rest of this block (until ${context.formatWhen(restEnd, now)})"
+                else -> "Rest of this block"
+            }
+            UnlockScreen(
+                waitMinutes = cfg.unlockWaitMinutes,
+                restLabel = restLabel,
+                onPauseShort = {
+                    vm.pauseShort()
+                    screen = Screen.Home
+                },
+                onPauseRest = {
+                    vm.pauseRestOfBlock()
+                    screen = Screen.Home
+                },
+                onCancel = { screen = Screen.Home },
+            )
+        }
         Screen.BlockList -> AppListScreen(
             title = "Blocked apps",
-            subtitle = "The main block list: used by Block now, and by schedules set to it.",
+            subtitle = "The main block list: used by Block now, and by schedules set to it. Unticking takes 24 hours, " +
+                "and isn't possible during a block.",
             apps = apps,
             selected = blocked,
             disabledReason = { if (it in allowlist) "Always allowed" else null },
             onToggle = vm::setBlocked,
             onBack = { screen = Screen.Home },
+            note = { pkg ->
+                cfg.pending.firstOrNull { it.unblock == pkg }?.let { "Unblocks ${context.formatWhen(it.applyAt, now)} · tap to keep it" }
+            },
         )
         Screen.Allowlist -> AppListScreen(
             title = "Always allowed",
-            subtitle = "Ticked apps are never blocked. Essential apps can't be removed.",
+            subtitle = "Ticked apps are never blocked. Essential apps can't be removed. Adding an app takes 24 hours.",
             apps = apps,
             selected = allowlist,
             disabledReason = { if (it in ess.locked) "Essential: always allowed" else null },
             onToggle = { pkg, allowed -> vm.setAllowed(pkg, allowed, ess) },
             onBack = { screen = Screen.Home },
+            note = { pkg ->
+                cfg.pending.firstOrNull { it.allow == pkg }?.let { "Allowed from ${context.formatWhen(it.applyAt, now)} · tap to cancel" }
+            },
         )
         Screen.Checklist -> ChecklistScreen(setup = setup, onBack = { screen = Screen.Home })
         Screen.Schedule -> ScheduleScreen(

@@ -41,6 +41,22 @@ data class Schedule(
 
     private fun LocalDate.atMinute(minute: Int): LocalDateTime = atTime(minute / 60, minute % 60)
 
+    /**
+     * True if this version blocks at least everything [old] did, so the change can apply at once. Errs
+     * towards "no": a change that is in fact stricter but looks otherwise just waits its 24 hours.
+     *
+     * @param mainList the main block list, for schedules that use it.
+     */
+    fun isAtLeastAsStrictAs(old: Schedule, mainList: Set<String>): Boolean {
+        if (!old.enabled || !old.isValid) return true
+        if (!enabled || !isValid) return false
+        if (!days.containsAll(old.days)) return false
+        // Each run must cover the old run on the same start day: start no later, end no earlier.
+        fun Schedule.endOffset() = endMinute + if (crossesMidnight) MINUTES_PER_DAY else 0
+        if (startMinute > old.startMinute || endOffset() < old.endOffset()) return false
+        return (packages ?: mainList).containsAll(old.packages ?: mainList)
+    }
+
     companion object {
         const val MINUTES_PER_DAY = 24 * 60
     }

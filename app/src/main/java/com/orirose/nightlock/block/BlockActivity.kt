@@ -20,7 +20,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -111,11 +110,12 @@ private fun BlockScreen(packageName: String?, reason: String?, onGoHome: () -> U
                 }
                 Spacer(Modifier.height(24.dp))
                 Button(onClick = onGoHome, modifier = Modifier.fillMaxWidth()) { Text("Go to home screen") }
-                OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth()) { Text("Request pause") }
+                // Deliberately no shortcut: unlocking means going to NightLock yourself.
                 Text(
-                    "Pausing comes in milestone 3.",
-                    style = MaterialTheme.typography.bodySmall,
+                    "Really need it? Unlocking is done in the NightLock app.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                 )
             }
         }

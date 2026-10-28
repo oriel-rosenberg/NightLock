@@ -27,15 +27,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.orirose.nightlock.BuildConfig
+import com.orirose.nightlock.Durations
 import com.orirose.nightlock.data.Config
+import com.orirose.nightlock.data.Pending
 import com.orirose.nightlock.data.Schedule
 import com.orirose.nightlock.describeDays
 import com.orirose.nightlock.formatDuration
 import com.orirose.nightlock.formatMinuteOfDay
+import com.orirose.nightlock.formatTime
 import com.orirose.nightlock.formatWhen
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
+
+private val WAIT_CHOICES = listOf(1, 2, 3, 5, 10, 15, 30)
 
 @Composable
 fun HomeScreen(
@@ -44,15 +49,20 @@ fun HomeScreen(
     blockedCount: Int,
     allowedCount: Int?,
     setup: SetupState,
+    labelOf: (packageName: String) -> String,
     onManualBlock: (Boolean) -> Unit,
+    onUnlock: () -> Unit,
+    onEndPause: () -> Unit,
     onScheduleEnabled: (id: String, enabled: Boolean) -> Unit,
     onEditSchedule: (Schedule) -> Unit,
     onAddSchedule: () -> Unit,
+    onUnlockWait: (Int) -> Unit,
+    onCancelPending: (Pending) -> Unit,
     onOpenBlockList: () -> Unit,
     onOpenAllowlist: () -> Unit,
     onOpenChecklist: () -> Unit,
 ) {
-    val blocking = config.isBlocking(now)
+    val blockTime = config.isBlockTime(now)
     Surface(Modifier.fillMaxSize()) {
         Column(
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -63,11 +73,11 @@ fun HomeScreen(
             if (BuildConfig.TEST_MODE) {
                 SectionCard(MaterialTheme.colorScheme.tertiaryContainer) {
                     Text("TEST MODE", style = MaterialTheme.typography.titleMedium)
-                    Text("Warnings, delays, pauses and cooldowns are measured in seconds instead of minutes.")
+                    Text("Waits, warnings and pauses are in seconds instead of minutes; the 24-hour wait is one minute.")
                 }
             }
 
-            StatusCard(config, now, blocking, setup.service)
+            StatusCard(config, now, setup.service, onUnlock, onEndPause)
 
             if (setup.done < setup.total) {
                 SectionCard(if (setup.service) Color.Unspecified else MaterialTheme.colorScheme.tertiaryContainer) {
@@ -81,17 +91,36 @@ fun HomeScreen(
                 }
             }
 
+            if (config.pending.isNotEmpty()) {
+                SectionCard {
+                    Text("Waiting 24 hours", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Changes that make NightLock easier apply a day after you make them.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    config.pending.sortedBy { it.applyAt }.forEach { change ->
+                        PendingRow(describe(change, config, labelOf), LocalContext.current.formatWhen(change.applyAt, now)) {
+                            onCancelPending(change)
+                        }
+                    }
+                }
+            }
+
             SectionCard(if (config.manualBlocking) MaterialTheme.colorScheme.primaryContainer else Color.Unspecified) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Block now", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            if (config.manualBlock && blockedCount == 0) "On, but no apps are chosen yet: choose them under Blocked apps."
-                            else "Blocks the main block list until you switch it off.",
+                            when {
+                                config.manualBlock && blockedCount == 0 -> "On, but no apps are chosen yet: choose them under Blocked apps."
+                                config.manualBlocking -> "On until you switch it off with Unlock."
+                                else -> "Blocks the main block list until you switch it off with Unlock."
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
-                    Switch(checked = config.manualBlock, onCheckedChange = onManualBlock)
+                    Switch(checked = config.manualBlock, onCheckedChange = onManualBlock, enabled = !config.manualBlocking)
                 }
             }
 
@@ -116,10 +145,27 @@ fun HomeScreen(
             }
 
             SectionCard {
+                Text("Unlock wait", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "How long the unlock screen makes you wait before the text appears. Longer applies at once; shorter takes 24 hours.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    WAIT_CHOICES.forEach { minutes ->
+                        Toggle("$minutes", selected = config.unlockWaitMinutes == minutes, modifier = Modifier.weight(1f)) {
+                            onUnlockWait(minutes)
+                        }
+                    }
+                }
+                Text("${config.unlockWaitMinutes} ${Durations.minuteUnit}", style = MaterialTheme.typography.bodySmall)
+            }
+
+            SectionCard {
                 Text("Always allowed", style = MaterialTheme.typography.titleMedium)
                 Text("${allowedCount ?: "…"} apps that are never blocked: phone, messages, clock, Settings, maps and any you add.")
-                Button(onClick = onOpenAllowlist, enabled = !blocking) { Text("Edit allowlist") }
-                if (blocking) {
+                Button(onClick = onOpenAllowlist, enabled = !blockTime) { Text("Edit allowlist") }
+                if (blockTime) {
                     Text(
                         "Locked while a block is on.",
                         style = MaterialTheme.typography.bodySmall,
@@ -132,17 +178,30 @@ fun HomeScreen(
 }
 
 @Composable
-private fun StatusCard(config: Config, now: LocalDateTime, blocking: Boolean, serviceRunning: Boolean) {
+private fun StatusCard(config: Config, now: LocalDateTime, serviceRunning: Boolean, onUnlock: () -> Unit, onEndPause: () -> Unit) {
     val context = LocalContext.current
-    SectionCard(if (blocking) MaterialTheme.colorScheme.primaryContainer else Color.Unspecified) {
-        Text(if (blocking) "Blocking now" else "Not blocking", style = MaterialTheme.typography.titleMedium)
-        val detail = if (blocking) {
-            blockDescription(config, now, context)
-        } else {
-            config.nextBlockStart(now)?.let { "Next: ${it.schedule.name}, ${context.formatWhen(it.start, now)}" }
-                ?: "No schedule coming up."
+    val blockTime = config.isBlockTime(now)
+    val paused = blockTime && config.isPaused(now)
+    SectionCard(if (blockTime && !paused) MaterialTheme.colorScheme.primaryContainer else Color.Unspecified) {
+        when {
+            paused -> {
+                Text("Paused", style = MaterialTheme.typography.titleMedium)
+                Text("Blocking again at ${context.formatTime(config.pausedUntil!!.toLocalTime())}.")
+                OutlinedButton(onClick = onEndPause) { Text("End pause now") }
+            }
+            blockTime -> {
+                Text("Blocking now", style = MaterialTheme.typography.titleMedium)
+                Text(blockDescription(config, now, context))
+                Button(onClick = onUnlock) { Text("Unlock…") }
+            }
+            else -> {
+                Text("Not blocking", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    config.nextBlockStart(now)?.let { "Next: ${it.schedule.name}, ${context.formatWhen(it.start, now)}" }
+                        ?: "No schedule coming up.",
+                )
+            }
         }
-        Text(detail)
         if (!serviceRunning) {
             Text(
                 "The blocker service is off, so nothing is actually blocked. See the setup checklist.",
@@ -152,13 +211,36 @@ private fun StatusCard(config: Config, now: LocalDateTime, blocking: Boolean, se
     }
 }
 
+private fun describe(change: Pending, config: Config, labelOf: (String) -> String): String {
+    val scheduleName = change.scheduleId?.let { id -> config.schedules.firstOrNull { it.id == id }?.name } ?: "a schedule"
+    return when {
+        change.unblock != null -> "Unblock ${labelOf(change.unblock)}"
+        change.allow != null -> "Always allow ${labelOf(change.allow)}"
+        change.deleteSchedule != null -> "Delete $scheduleName"
+        change.schedule != null -> if (!change.schedule.enabled) "Switch off $scheduleName" else "Change $scheduleName"
+        change.unlockWaitMinutes != null -> "Unlock wait: ${change.unlockWaitMinutes} ${Durations.minuteUnit}"
+        else -> "Change"
+    }
+}
+
+@Composable
+private fun PendingRow(what: String, applies: String, onCancel: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(what, style = MaterialTheme.typography.bodyLarge)
+            Text("applies $applies", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = onCancel) { Text("Cancel") }
+    }
+}
+
 /**
  * "Bedtime · ends 07:00 (in 6 h 12 min)", or the manual switch, for [packageName] or for any block if null.
  * Shared with the block screen.
  */
 fun blockDescription(config: Config, now: LocalDateTime, context: android.content.Context, packageName: String? = null): String {
     if (config.manualBlocking && (packageName == null || packageName in config.blockedPackages)) {
-        return "\"Block now\" is on: blocked until you switch it off in NightLock."
+        return "\"Block now\" is on."
     }
     val names = config.activeScheduleNames(now, packageName).joinToString(", ")
     val end = config.blockEndsAt(now, packageName) ?: return names

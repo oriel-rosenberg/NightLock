@@ -167,7 +167,7 @@ private fun Hint(text: String) {
 }
 
 @Composable
-private fun Toggle(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+internal fun Toggle(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     Box(
         contentAlignment = Alignment.Center,

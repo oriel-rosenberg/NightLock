@@ -132,6 +132,11 @@ class BlockerService : AccessibilityService() {
     private fun onClock() {
         val now = LocalDateTime.now()
         try {
+            // Changes whose 24 hours are up, and an ended pause, get saved; saving runs this again.
+            val known = essentials
+            if (known != null && config.applyDue(now, known) != config) {
+                scope.launch { configRepository.update { it.applyDue(LocalDateTime.now(), known) } }
+            }
             refreshRules(now)
             Log.i(LOG_TAG, "Clock check: blocking=${rules.active}, ${rules.blocked.size} apps")
             // A block can start while a blocked app is already open.

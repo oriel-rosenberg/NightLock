@@ -22,6 +22,13 @@ data class Config(
     /** The "Block now" switch. */
     val manualBlock: Boolean = false,
     val schedules: List<Schedule> = emptyList(),
+    /** How long the unlock screen makes you wait before the text appears, in minutes (seconds in TEST_MODE). */
+    val unlockWaitMinutes: Int = 3,
+    /** While a pause runs, nothing is blocked until this moment; null when not paused. */
+    @Serializable(with = LocalDateTimeSerializer::class)
+    val pausedUntil: LocalDateTime? = null,
+    /** Changes that make NightLock easier, waiting out their 24 hours. */
+    val pending: List<Pending> = emptyList(),
 ) {
     fun allowlist(essentials: Essentials): Set<String> =
         (allowedPackages ?: essentials.defaultAllowlist) + essentials.locked
@@ -42,8 +49,16 @@ data class Config(
     /** The "Block now" switch is on and has apps to block. */
     val manualBlocking: Boolean get() = manualBlock && blockedPackages.isNotEmpty()
 
-    /** True while "Block now" or a schedule is blocking at least one app. */
-    fun isBlocking(now: LocalDateTime): Boolean = manualBlocking || activeOccurrences(now).isNotEmpty()
+    /**
+     * True while "Block now" or a schedule is on for at least one app, paused or not. Settings that would
+     * make NightLock easier are locked for this whole time.
+     */
+    fun isBlockTime(now: LocalDateTime): Boolean = manualBlocking || activeOccurrences(now).isNotEmpty()
+
+    fun isPaused(now: LocalDateTime): Boolean = pausedUntil?.let { now < it } == true
+
+    /** True while apps are actually being blocked: block time, and no pause running. */
+    fun isBlocking(now: LocalDateTime): Boolean = isBlockTime(now) && !isPaused(now)
 
     /** The apps blocked at [now], before the allowlist is taken out. */
     fun blockedPackagesAt(now: LocalDateTime): Set<String> = buildSet {
@@ -79,9 +94,57 @@ data class Config(
     fun warningsDue(now: LocalDateTime): List<Occurrence> =
         occurrencesAround(now).filter { o -> o.warningAt?.let { now >= it && now < o.start } == true }
 
-    /** The next moment anything changes (a block starts or ends, a warning is due), or null if never. */
+    /**
+     * The next moment anything changes (a block starts or ends, a warning is due, a pause ends, a waiting
+     * change applies), or null if never.
+     */
     fun nextChangeAfter(now: LocalDateTime): LocalDateTime? =
-        occurrencesAround(now).flatMap { listOfNotNull(it.start, it.end, it.warningAt) }.filter { it > now }.minOrNull()
+        (occurrencesAround(now).flatMap { listOfNotNull(it.start, it.end, it.warningAt) } +
+            listOfNotNull(pausedUntil) + pending.map { it.applyAt })
+            .filter { it > now }.minOrNull()
+
+    /**
+     * Tidies up at [now]: forgets a pause that has ended (so turning the clock back can't bring it back), and
+     * applies waiting changes whose 24 hours are up, but never during a block: those wait for it to end.
+     * Returns an equal config when there's nothing to do.
+     */
+    fun applyDue(now: LocalDateTime, essentials: Essentials): Config {
+        val base = if (pausedUntil != null && now >= pausedUntil) copy(pausedUntil = null) else this
+        if (base.isBlockTime(now)) return base
+        val (due, waiting) = base.pending.partition { it.applyAt <= now }
+        if (due.isEmpty()) return base
+        return due.fold(base.copy(pending = waiting)) { config, change -> config.apply(change, essentials) }
+    }
+
+    private fun apply(change: Pending, essentials: Essentials): Config = when {
+        change.unblock != null -> copy(blockedPackages = blockedPackages - change.unblock)
+        change.allow != null -> copy(allowedPackages = (allowedPackages ?: essentials.defaultAllowlist) + change.allow)
+        change.schedule != null -> copy(schedules = schedules.map { if (it.id == change.schedule.id) change.schedule else it })
+        change.deleteSchedule != null -> copy(schedules = schedules.filterNot { it.id == change.deleteSchedule })
+        change.unlockWaitMinutes != null -> copy(unlockWaitMinutes = change.unlockWaitMinutes)
+        else -> this
+    }
+}
+
+/**
+ * One change that makes NightLock easier, applied at [applyAt] (24 hours after it was made). Exactly one
+ * of the other fields is set.
+ */
+@Serializable
+data class Pending(
+    @Serializable(with = LocalDateTimeSerializer::class)
+    val applyAt: LocalDateTime,
+    /** Take this app off the main block list. */
+    val unblock: String? = null,
+    /** Add this app to the allowlist. */
+    val allow: String? = null,
+    /** Replace the schedule with this one's id. */
+    val schedule: Schedule? = null,
+    /** Delete the schedule with this id. */
+    val deleteSchedule: String? = null,
+    val unlockWaitMinutes: Int? = null,
+) {
+    val scheduleId: String? get() = schedule?.id ?: deleteSchedule
 }
 
 /** Back-to-back schedules followed when working out an end time; more than a week's worth. */

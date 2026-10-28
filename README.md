@@ -3,14 +3,17 @@
 A personal Android app blocker for bedtime. It's sideloaded on one Samsung Galaxy and isn't meant for the Play Store.
 Kotlin, Jetpack Compose, minSdk 26, targetSdk 37. No network permission.
 
-## Status: milestone 2 of 4
+## Status: milestone 3 of 4
 
 | # | Milestone | State |
 |---|-----------|-------|
 | 1 | Block list, "Block now" switch, accessibility blocking, block screen | done |
-| 2 | **Runs on its own:** schedules (crossing midnight), wind-down warning, survives reboots, setup checklist (incl. Samsung battery steps) | **this build** |
-| 3 | **Hard to give in:** pause flow (delay, random text, timed re-block, escalation, nightly cap), strict mode + 24 h cooldown, emergency unlock, logs and stats | next |
-| 4 | **Hard to escape:** blocking the Accessibility, Usage access and Date & time pages in Settings; an "Are you sure?" step when NightLock's App info page (Uninstall, Force stop) is opened during a block; clock-tampering detection | |
+| 2 | **Runs on its own:** schedules (crossing midnight), wind-down warning, survives reboots, setup checklist (incl. Samsung battery steps) | done |
+| 3 | **Hard to give in:** unlock (wait + 25-letter text → 30-minute pause or rest of the block), strict mode with a 24 h wait for easier changes | **this build** |
+| 4 | **Hard to escape:** blocking the Accessibility, Usage access and Date & time pages in Settings; an "Are you sure?" step when NightLock's App info page (Uninstall, Force stop) is opened during a block; clock-tampering detection; a simple log and stats | next |
+
+Milestone 3 follows the user's own design rather than the original spec: the same wait every time (no
+escalation, no nightly cap), and "Rest of this block" in place of a separate emergency unlock.
 
 **Low power by design.** Nothing runs between screen changes: no foreground service, no polling, no
 watchdog, no alarms. Whether a block is on is worked out from the clock each time the screen changes. While
@@ -47,8 +50,8 @@ first; with skipped tasks (`-x`) it leaves the old file alone. Debug builds are 
 ### TEST_MODE
 
 The `-Pnightlock.testMode=true` flag sets `BuildConfig.TEST_MODE`. It shrinks every duration from minutes to
-seconds: the wind-down warning now, and from milestone 3 pause delays, pause lengths and the strict-mode cooldown.
-Schedule clock times (23:30) are never scaled. A TEST_MODE build
+seconds: the unlock wait, the 30-minute pause and the wind-down warning. The 24-hour wait for easier changes becomes
+one minute. Schedule clock times (23:30) are never scaled. A TEST_MODE build
 is called **NightLock TEST** on the home screen and shows a banner inside the app. To go back to normal
 durations, build without the flag and install over it.
 
@@ -182,6 +185,36 @@ a Monday 23:30–07:00 schedule blocks from Monday 23:30 to Tuesday 07:00. Times
 Schedules that touch (one ends at 07:00, another starts at 07:00) count as one block, and the block screen shows
 the final end time. When a block ends while the block screen is up, it closes by itself.
 
+**Unlocking.** The block screen has no unlock button on purpose: it only says unlocking is done in NightLock.
+In NightLock, **Unlock…** shows a countdown (the unlock wait, 3 min by default) that starts over if you leave the
+screen or let it turn off. Then it shows 25 random upper- and lower-case letters to type: no pasting, and a typo
+gives you a new text. Then you choose **Pause 30 min** or **Rest of this block** (or switching Block now off). A
+countdown notification shows while a pause runs, and blocking comes back by itself when it ends. **End pause now**
+on the home screen re-blocks early. Every unlock costs the same.
+
+**Strict mode.** A change that makes NightLock stricter applies at once: more apps, more days, a longer window, a
+longer unlock wait, removing an app from the allowlist, a new schedule. A change that makes it easier (unticking an app,
+allowing an app, a shorter or switched-off or deleted schedule, a shorter wait) is refused while a block is on, even
+during a pause. Any other time it's queued for 24 hours, listed under **Waiting 24 hours** on the home screen,
+where it can be cancelled. A queued change whose 24 hours run out during a block waits for that block to end.
+Block now can only be switched off through Unlock. A 30-minute pause never runs past the end of its block, and
+"Rest of this block" lasts at most a day.
+
+## Testing milestone 3
+
+Quickest with a TEST_MODE build (`.\build.cmd assembleRelease "-Pnightlock.testMode=true"`): waits are seconds and
+the 24 hours is one minute. Then reinstall a normal build for real use.
+
+1. With a block on, open a blocked app: the block screen says to unlock in NightLock and has no unlock button.
+2. NightLock → **Unlock…**: the countdown runs. Press Home and come back: it starts over.
+3. Let it finish, type the text. Make a typo on purpose: a new text appears. Paste doesn't work.
+4. **Pause 30 min**: the blocked app opens; a countdown notification shows. When it ends, the block is back.
+5. Unlock again → **Rest of this block**: free until the schedule's end time.
+6. During a block, try to untick an app, switch off or shorten a schedule, or shorten the unlock wait: each is refused.
+   Adding an app or a schedule works.
+7. Outside a block, untick an app: it shows *Unblocks …* and appears under **Waiting 24 hours**. Cancel one, let another
+   apply.
+
 ## Testing milestone 2
 
 1. Install over the old version (`adb install -r nightlock.apk`); your block list stays.
@@ -201,9 +234,10 @@ the final end time. When a block ends while the block screen is up, it closes by
 
 These are fixed in later milestones or accepted as limitations:
 
-- **Easy to undo for now.** Anyone can switch off *Block now*, edit or switch off a schedule, untick apps, or turn off
-  the accessibility service. Strict mode (3) and Settings-page blocking (4) close those holes.
-- **Changing the phone's clock** moves the schedules with it. Clock-tampering detection comes in milestone 4.
+- **Accessibility settings are still a way out.** Turning off the NightLock blocker in Settings → Accessibility, or
+  force-stopping the app, ends blocking. Milestone 4 covers those pages during a block.
+- **Changing the phone's clock** moves the schedules with it, ends a pause early or late, and can run out the 24-hour
+  wait for easier changes. Clock-tampering detection (and blocking the Date & time page) comes in milestone 4.
 - **No fallback** if the accessibility service gets killed. This is deliberate, to save battery (see *Low power by design*).
 - **Picture-in-picture** windows of blocked apps are left alone. Covering them would trap you on the block screen, because
   PiP floats above it. Opening the PiP window to full size is blocked as normal.
@@ -224,5 +258,9 @@ app/src/main/java/com/orirose/nightlock/
   block/BlockerService.kt  accessibility service: detects blocked apps, schedule timer, opens the block screen
   block/BlockActivity.kt   the block screen
   block/Warnings.kt        the wind-down notification
-  ui/                      Compose screens (home, schedule editor, app lists, setup checklist), theme, view model
+  block/Pauses.kt          the countdown notification during a pause
+  data/Serializers.kt      saving times as text
+  ui/MainViewModel.kt      every settings change; strict mode is enforced here
+  ui/UnlockScreen.kt       the wait, the 25-letter text, the pause choices
+  ui/                      other Compose screens (home, schedule editor, app lists, setup checklist), theme
 ```
