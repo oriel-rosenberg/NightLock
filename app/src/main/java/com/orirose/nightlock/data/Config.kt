@@ -1,6 +1,7 @@
 package com.orirose.nightlock.data
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -8,6 +9,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.orirose.nightlock.LOG_TAG
 import java.time.LocalDateTime
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -35,7 +39,12 @@ data class Config(
     val limits: List<TimeLimit> = emptyList(),
     /** Limits that ran out and were unlocked, by id: each one blocks nothing until its moment. */
     val limitPauses: Map<String, @Serializable(with = LocalDateTimeSerializer::class) LocalDateTime> = emptyMap(),
+    /** The file the user chose for a copy of these settings, which outlives uninstalling; null if none. */
+    val backupUri: String? = null,
 ) {
+    /** True on a fresh install: nothing has been set up yet, so restoring a backup loses nothing. */
+    val isUntouched: Boolean get() = copy(backupUri = null) == Config()
+
     fun allowlist(essentials: Essentials): Set<String> =
         (allowedPackages ?: essentials.defaultAllowlist) + essentials.locked
 
@@ -75,7 +84,7 @@ data class Config(
 
     /** The limits whose allowance for today is used up, whether they've been unlocked or not. */
     fun limitsReached(now: LocalDateTime, usage: DayUsage): List<TimeLimit> {
-        val today = usage.on(now.toLocalDate())
+        val today = usage.on(limitDay(now))
         return liveLimits.filter { today.of(it) >= it.allowanceMs }
     }
 
@@ -108,21 +117,21 @@ data class Config(
 
     /**
      * Pauses what's blocking at [now] until [until]: schedules and "Block now" no later than their end, and
-     * the limits that have run out no later than midnight. Nothing else is touched, so a schedule that
+     * the limits that have run out no later than the end of their day. Nothing else is touched, so a schedule that
      * starts or another limit that runs out during the pause still blocks.
      */
     fun withPause(now: LocalDateTime, usage: DayUsage, until: LocalDateTime): Config = copy(
         pausedUntil = if (schedulesBlocking(now)) blockEndsAt(now)?.let { minOf(it, until) } ?: until else pausedUntil,
-        limitPauses = limitPauses + limitsBlocking(now, usage).associate { it.id to minOf(until, midnightAfter(now)) },
+        limitPauses = limitPauses + limitsBlocking(now, usage).associate { it.id to minOf(until, nextLimitReset(now)) },
     )
 
     /**
      * Ends what's blocking at [now] for good: "Block now" goes off, running schedules pause until they end, at
      * most a day (schedules that touch end to end could otherwise run on for weeks), and the limits that have
-     * run out pause until midnight, when they start over anyway.
+     * run out pause until the end of their day, when they start over anyway.
      */
     fun withRestOff(now: LocalDateTime, usage: DayUsage): Config {
-        val limitsOff = limitPauses + limitsBlocking(now, usage).associate { it.id to midnightAfter(now) }
+        val limitsOff = limitPauses + limitsBlocking(now, usage).associate { it.id to nextLimitReset(now) }
         if (!schedulesBlocking(now)) return copy(limitPauses = limitsOff)
         val withoutManual = copy(manualBlock = false)
         val until = withoutManual.blockEndsAt(now)?.let { minOf(it, now.plusDays(1)) }
@@ -131,7 +140,7 @@ data class Config(
 
     /** How long until a limit among [counting] (ids) runs out, or null if none of them has any time left to run out. */
     fun millisToRunOut(now: LocalDateTime, usage: DayUsage, counting: Set<String>): Long? {
-        val today = usage.on(now.toLocalDate())
+        val today = usage.on(limitDay(now))
         return liveLimits.filter { it.id in counting }.map { it.allowanceMs - today.of(it) }.filter { it > 0 }.minOrNull()
     }
 
@@ -165,19 +174,19 @@ data class Config(
 
     /**
      * The next moment anything changes (a block starts or ends, a warning is due, a pause ends, a waiting
-     * change applies, or limits start over at midnight), or null if never. A limit running out depends on
+     * change applies, or limits start over), or null if never. A limit running out depends on
      * what's on screen: see [millisToRunOut].
      */
     fun nextChangeAfter(now: LocalDateTime): LocalDateTime? =
         (occurrencesAround(now).flatMap { listOfNotNull(it.start, it.end, it.warningAt) } +
             listOfNotNull(pausedUntil) + limitPauses.values + pending.map { it.applyAt } +
-            listOfNotNull(midnightAfter(now).takeIf { liveLimits.isNotEmpty() }))
+            listOfNotNull(nextLimitReset(now).takeIf { liveLimits.isNotEmpty() }))
             .filter { it > now }.minOrNull()
 
     /**
      * Tidies up at [now]: forgets pauses that have ended (so turning the clock back can't bring them back), and
      * applies waiting changes whose 24 hours are up, but never during a block: those wait for it to end, and a
-     * change to a limit that has run out waits for midnight.
+     * change to a limit that has run out waits for the limit to start over.
      * Returns an equal config when there's nothing to do.
      */
     fun applyDue(now: LocalDateTime, essentials: Essentials, usage: DayUsage): Config {
@@ -201,8 +210,6 @@ data class Config(
         else -> this
     }
 }
-
-private fun midnightAfter(now: LocalDateTime): LocalDateTime = now.toLocalDate().plusDays(1).atStartOfDay()
 
 /**
  * One change that makes NightLock easier, applied at [applyAt] (24 hours after it was made). Exactly one
@@ -242,16 +249,32 @@ class ConfigRepository(private val context: Context) {
 
     val config: Flow<Config> = context.dataStore.data.map { decode(it[CONFIG_KEY]) }
 
+    private val _backupFailed = MutableStateFlow(false)
+
+    /** True while the last attempt to write the backup file failed. */
+    val backupFailed: StateFlow<Boolean> = _backupFailed.asStateFlow()
+
     /**
      * Changes the config in one atomic step, so [transform] always sees the latest saved version. Nothing is
-     * written (and nobody is told) when the config comes back unchanged.
+     * written (and nobody is told) when the config comes back unchanged. Saved changes go to the backup file too.
      */
     suspend fun update(transform: (Config) -> Config) {
+        var changed: Config? = null
         context.dataStore.edit { prefs ->
             val old = decode(prefs[CONFIG_KEY])
             val new = transform(old)
-            if (new != old) prefs[CONFIG_KEY] = json.encodeToString(Config.serializer(), new)
+            if (new != old) {
+                prefs[CONFIG_KEY] = json.encodeToString(Config.serializer(), new)
+                changed = new
+            }
         }
+        changed?.let { backUp(it) }
+    }
+
+    /** Copies [config] to the backup file, if there is one. A blank config never replaces a real backup. */
+    suspend fun backUp(config: Config) {
+        val uri = config.backupUri ?: return
+        if (!config.isUntouched) _backupFailed.value = !writeBackup(context, Uri.parse(uri), config)
     }
 
     private fun decode(text: String?): Config {

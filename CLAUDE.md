@@ -36,4 +36,6 @@ README.md has the milestone plan, the permissions table, adb commands and the co
   sees, per limit: no usage access, and no history of app use.
 - No device admin, uninstall protection, or hiding of Settings pages: NightLock can always be switched off in
   Settings → Accessibility and uninstalled normally.
+- App data stays in private storage, with `allowBackup` off. The one exception is the settings backup: a file
+  the user picks by hand, holding settings only, restored only onto a blank install.
 - Every user-visible duration goes through TEST_MODE scaling once durations exist (milestone 2 onwards).

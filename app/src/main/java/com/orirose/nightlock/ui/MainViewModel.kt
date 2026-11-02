@@ -1,9 +1,13 @@
 package com.orirose.nightlock.ui
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.orirose.nightlock.Durations
+import com.orirose.nightlock.LOG_TAG
 import com.orirose.nightlock.block.BlockerService
 import com.orirose.nightlock.block.Pauses
 import com.orirose.nightlock.configRepository
@@ -15,6 +19,7 @@ import com.orirose.nightlock.data.Pending
 import com.orirose.nightlock.data.Schedule
 import com.orirose.nightlock.data.TimeLimit
 import com.orirose.nightlock.data.loadLaunchableApps
+import com.orirose.nightlock.data.readBackup
 import com.orirose.nightlock.formatWhen
 import java.time.Duration
 import java.time.LocalDateTime
@@ -64,6 +69,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Applies waiting changes whose 24 hours are up. Called when the app comes to the front. */
     fun applyDueChanges(essentials: Essentials) = change { config, now -> Outcome(config.applyDue(now, essentials, usage)) }
+
+    /** True while the backup file can't be written, so the setup checklist can say so. */
+    val backupFailed: StateFlow<Boolean> = repository.backupFailed
+
+    /** Writes the backup file again, which also finds out if it has gone. Called when the app comes to the front. */
+    fun refreshBackup() {
+        val current = config.value ?: return
+        viewModelScope.launch { repository.backUp(current) }
+    }
+
+    /** Keeps the settings in [uri] from now on, a file the user just chose. */
+    fun setBackupFile(uri: Uri) {
+        keepAccess(uri)
+        change { config, _ -> Outcome(config.copy(backupUri = uri.toString()), "Your settings are now kept in that file too.") }
+    }
+
+    /** Takes the settings from a backup file, and carries on keeping them there. Only on a fresh install. */
+    fun restoreBackup(uri: Uri) {
+        viewModelScope.launch {
+            val saved = readBackup(getApplication(), uri)
+            if (saved == null) {
+                _messages.tryEmit("That isn't a NightLock settings file.")
+                return@launch
+            }
+            keepAccess(uri)
+            var restored = false
+            repository.update { config ->
+                if (config.isUntouched) saved.copy(backupUri = uri.toString()).also { restored = true } else config
+            }
+            _messages.tryEmit(if (restored) "Settings restored." else "NightLock is already set up, so nothing was changed.")
+        }
+    }
+
+    /** Asks Android to let NightLock keep using a file the user picked, after this run of the app too. */
+    private fun keepAccess(uri: Uri) {
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        runCatching { getApplication<Application>().contentResolver.takePersistableUriPermission(uri, flags) }
+            .onFailure { Log.e(LOG_TAG, "Couldn't keep access to the backup file", it) }
+    }
 
     /** Switching it off while it blocks something is an unlock; it can only be switched off here when it doesn't. */
     fun setManualBlock(on: Boolean) = change { config, _ ->

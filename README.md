@@ -3,14 +3,14 @@
 A personal Android app blocker for bedtime. It's sideloaded on one Samsung Galaxy and isn't meant for the Play Store.
 Kotlin, Jetpack Compose, minSdk 26, targetSdk 37. No network permission.
 
-## Status: version 0.4.0
+## Status: version 0.4.1
 
 | # | Milestone | State |
 |---|-----------|-------|
 | 1 | Block list, "Block now" switch, accessibility blocking, block screen | done |
 | 2 | **Runs on its own:** schedules (crossing midnight), wind-down warning, survives reboots, setup checklist (incl. Samsung battery steps) | done |
 | 3 | **Hard to give in:** unlock by waiting or by typing, strict mode with a 24 h wait for easier changes | done |
-| 0.4 | **Daily limits:** a time limit a day for one app or a group of apps, unlocked the same two ways | **this build** |
+| 0.4 | **Daily limits:** a time limit a day for one app or a group of apps, unlocked the same two ways; a settings backup that outlives uninstalling | **this build** |
 | next | A simple log and stats | optional, not started |
 
 Milestone 3 follows the user's own design rather than the original spec: two unlock paths, the same cost every
@@ -23,7 +23,7 @@ Accessibility always works; it's a deliberate trip into Settings rather than a q
 **Low power by design.** Nothing runs between screen changes: no foreground service, no polling, no
 watchdog, no alarms. Whether a block is on is worked out from the clock each time the screen changes. While
 the phone is awake, one timer fires at the next change (a block starting while you're in a blocked app, a wind-down
-warning, the app on screen using up its daily limit, midnight). It doesn't wake a sleeping phone; turning the
+warning, the app on screen using up its daily limit, limits starting over at 02:00). It doesn't wake a sleeping phone; turning the
 screen on re-checks the clock instead, since nobody is using an app while the screen is off. Android restarts the accessibility service after a
 reboot by itself, so no "start at boot" permission is needed either. The trade-off: if the system kills the
 accessibility service, nothing blocks until it restarts. The Samsung battery steps in the setup checklist make
@@ -139,9 +139,12 @@ an app that just became your default home screen or phone app is never covered. 
 app, add it to the allowlist** to be sure its ringing screen always shows.
 NightLock's links to Settings go only to a preinstalled app; if none can open the page, nothing opens.
 
-**Nothing can leave the phone.** No internet permission (stripped even if a library asks for it), nothing shared
+**Nothing leaves the phone by itself.** No internet permission (stripped even if a library asks for it), nothing shared
 with other apps. Settings stay in NightLock's private storage, with Android backup off. So does today's time on each
 daily limit, which is replaced every day and keeps no history. Logs hold package names only, and only adb can read them.
+The one exception is the optional settings backup, a file in the place you choose. It holds your lists, schedules and
+limits, including the package names of the apps you block, and no usage or history. Anything with access to that
+folder can read it, and if you pick a cloud folder it syncs there.
 
 **Only you can update it.** Android installs an update over NightLock only if it's signed with the same key, and an
 update keeps NightLock's accessibility access. Release builds are signed with a private 4096-bit RSA key with a
@@ -166,6 +169,27 @@ can't install over the release build.
 - **Android's Advanced Protection mode** switches off accessibility services that aren't accessibility tools,
   NightLock's included.
 
+## If you delete NightLock
+
+In an emergency you can always get out quickly, by either of these:
+
+- **Turn it off** in Settings → Accessibility → Installed apps → NightLock blocker. Blocking stops at once and everything
+  stays, so nothing needs restoring. Turn it back on later.
+- **Uninstall it.** Android normally deletes an app's settings with it, so two things keep yours:
+  - **The settings backup** (setup checklist → *Settings backup*): pick a file once, for example in Documents. It's
+    rewritten after every change. After a reinstall the home screen shows **Restore settings**: pick the file and
+    everything is back, and the file carries on being used. Restoring only works while NightLock is still blank, so it
+    can't be used to undo settings later.
+  - **Keep app data:** the app asks Android to offer this in its uninstall dialog. If your phone shows the option, tick
+    it and nothing needs restoring at all. Not confirmed on One UI yet, so set up the backup as well.
+
+What comes back from the file: block lists, allowlist, schedules, limits, unlock settings and waiting changes. Pauses and
+today's time on limits don't, so limits start from zero after a reinstall, and you need to turn the accessibility service
+on again.
+
+Reinstalling needs the PC, as before (`adb install nightlock.apk`), because the phone refuses APKs tapped on directly.
+Keep `C:\Dev\android-toolchain\keys\nightlock` safe: only an APK signed with that key can read kept app data.
+
 ## How blocking works
 
 - `BlockerService` (accessibility) listens for `TYPE_WINDOW_STATE_CHANGED` and `TYPE_WINDOWS_CHANGED`. It checks the
@@ -185,9 +209,9 @@ a Monday 23:30–07:00 schedule blocks from Monday 23:30 to Tuesday 07:00. Times
 Schedules that touch (one ends at 07:00, another starts at 07:00) count as one block, and the block screen shows
 the final end time. When a block ends while the block screen is up, it closes by itself.
 
-**Daily limits.** A limit gives one app, or a group of apps, a time allowance per calendar day. Twitter and Facebook can
+**Daily limits.** A limit gives one app, or a group of apps, a time allowance per day, and a day runs from 02:00 to 02:00, so a late night still counts as the same day. Twitter and Facebook can
 each have 1 hour, plus a 90-minute group limit on the two: every limit counts on its own, and whichever runs out first
-blocks its apps until midnight. So an app can be blocked three ways: a schedule, its own limit, or a group limit.
+blocks its apps until 02:00. So an app can be blocked three ways: a schedule, its own limit, or a group limit.
 
 - **What counts:** time with the app on screen while the phone is awake and unlocked, including split screen and
   pop-up windows. Time on a group counts once even if two of its apps share the screen. Only limits are counted: no
@@ -195,10 +219,10 @@ blocks its apps until midnight. So an app can be blocked three ways: a schedule,
 - **How it's counted:** by the accessibility service, from the window changes it already sees, so there's no new
   permission. Numbers can differ a little from Samsung's own screen-time figures.
 - **Unlocking** works the same two ways, and covers only the limits that have run out at that moment. "Rest of today"
-  lasts until midnight. A schedule that starts during the pause, or another limit that runs out, still blocks.
+  lasts until 02:00. A schedule that starts during the pause, or another limit that runs out, still blocks.
 - **Strict mode:** lowering a limit or adding apps applies at once; raising it, removing apps or deleting it takes
   24 hours, and is refused during a schedule or Block now. Unlike a schedule, a limit can't be switched off for today.
-  A change to a limit that has already run out waits for midnight.
+  A change to a limit that has already run out waits for 02:00.
 - A limit that has run out doesn't lock the other settings: that only happens during a schedule or Block now.
 
 **Unlocking.** The block screen has no unlock button on purpose: it only says unlocking is done in NightLock.
@@ -227,16 +251,19 @@ Quickest with a TEST_MODE build (`.\build.cmd assembleRelease "-Pnightlock.testM
 seconds. Then reinstall a normal build for real use.
 
 1. **Add limit** → choose one app → 2 (minutes, or seconds in a test build). Open the app and leave it: the block screen
-   appears by itself when the time is up, with no taps. It says *Daily limit reached* and that it starts over at midnight.
+   appears by itself when the time is up, with no taps. It says *Daily limit reached* and that it starts over at 02:00.
 2. The home screen shows the limit as reached, and **Blocking now**.
 3. Use the app for part of its limit, leave it, turn the screen off for a while, come back: the time off screen isn't counted.
 4. **Group:** two apps with a shared limit shorter than their own limits. Use one, then the other: both get blocked once the
    shared time is used up, even though each has time left of its own.
-5. **Unlock** a limit that ran out, either way: only that limit is paused. **Rest of today** lasts until midnight. A schedule
+5. **Unlock** a limit that ran out, either way: only that limit is paused. **Rest of today** lasts until 02:00. A schedule
    starting during the pause still blocks.
 6. Raise a limit or delete it: it goes under **Waiting 24 hours**. Lower it: it applies at once.
-7. After midnight every limit starts from zero and any block from a limit ends.
+7. Time used just after midnight still counts on the same day. After 02:00 every limit starts from zero and any block from a limit ends.
 8. Restart the phone part-way through a limit: the time used so far is kept.
+9. **Backup:** set up *Settings backup* in the checklist, change a setting, then uninstall NightLock and install it again
+   over USB. Note whether the uninstall dialog offers to keep app data. If the settings didn't come back by themselves,
+   **Restore settings** on the home screen should bring everything back.
 
 ## Testing 0.3.1
 
@@ -297,6 +324,7 @@ app/src/main/java/com/orirose/nightlock/
   data/Config.kt           Config (one JSON document in DataStore), what's blocked when + ConfigRepository
   data/Schedule.kt         Schedule and its runs (Occurrence); crossing midnight (unit tested)
   data/Limit.kt            TimeLimit (one app or a group), DayUsage, saving today's counts (unit tested)
+  data/Backup.kt           the settings backup file (unit tested)
   data/Apps.kt             installed-app loading, Essentials (never-blocked apps)
   block/BlockRules.kt      which packages are blocked at a moment (unit tested)
   block/BlockerService.kt  accessibility service: detects blocked apps, schedule timer, opens the block screen

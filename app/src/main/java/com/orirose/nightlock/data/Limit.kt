@@ -15,10 +15,22 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/** A day for daily limits starts at this hour, not at midnight, so a late night still counts as the same day. */
+const val LIMIT_DAY_START_HOUR = 2
+
+/** The day [now] belongs to for daily limits: Tuesday 01:30 is still Monday's. */
+fun limitDay(now: LocalDateTime): LocalDate = now.minusHours(LIMIT_DAY_START_HOUR.toLong()).toLocalDate()
+
+/** When [day] starts for daily limits. */
+private fun limitDayStart(day: LocalDate): LocalDateTime = day.atTime(LIMIT_DAY_START_HOUR, 0)
+
+/** The next moment daily limits start over. */
+fun nextLimitReset(now: LocalDateTime): LocalDateTime = limitDayStart(limitDay(now).plusDays(1))
+
 /**
  * A daily allowance: [packages] may be on screen for [minutes] a day in total, then they're blocked until
- * midnight. One app makes an individual limit; several make a group that shares the allowance. An app can
- * be in any number of limits, and each one counts and runs out on its own.
+ * the day ends at [LIMIT_DAY_START_HOUR]. One app makes an individual limit; several make a group that shares
+ * the allowance. An app can be in any number of limits, and each one counts and runs out on its own.
  */
 @Serializable
 data class TimeLimit(
@@ -55,10 +67,11 @@ data class DayUsage(
     fun plus(limitIds: Set<String>, ms: Long): DayUsage =
         copy(millis = millis + limitIds.associateWith { (millis[it] ?: 0L) + ms })
 
-    /** The usage for [now]'s day after [ms] more on [limitIds], ending at [now]. Any part before midnight was yesterday's. */
+    /** The usage for [now]'s day after [ms] more on [limitIds], ending at [now]. Any part before the day began was yesterday's. */
     fun after(limitIds: Set<String>, ms: Long, now: LocalDateTime): DayUsage {
-        val sinceMidnight = Duration.between(now.toLocalDate().atStartOfDay(), now).toMillis()
-        return on(now.toLocalDate()).plus(limitIds, minOf(ms, sinceMidnight))
+        val day = limitDay(now)
+        val sinceDayStart = Duration.between(limitDayStart(day), now).toMillis()
+        return on(day).plus(limitIds, minOf(ms, sinceDayStart))
     }
 
     fun of(limit: TimeLimit): Long = millis[limit.id] ?: 0L

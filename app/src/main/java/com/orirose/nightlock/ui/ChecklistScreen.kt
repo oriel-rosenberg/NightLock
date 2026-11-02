@@ -46,32 +46,40 @@ import com.orirose.nightlock.data.isSystemApp
 import com.orirose.nightlock.data.queryActivities
 
 /** What the setup checklist checks. Samsung's "Never sleeping apps" can't be read, so it isn't counted. */
-data class SetupState(val service: Boolean, val notifications: Boolean, val battery: Boolean) {
-    val done: Int get() = listOf(service, notifications, battery).count { it }
-    val total: Int get() = 3
+data class SetupState(val service: Boolean, val notifications: Boolean, val battery: Boolean, val backup: Boolean) {
+    val done: Int get() = listOf(service, notifications, battery, backup).count { it }
+    val total: Int get() = 4
 }
 
 /** Read again each time the app comes back to the front, e.g. from Settings. */
 @Composable
-fun rememberSetupState(serviceRunning: Boolean): SetupState {
+fun rememberSetupState(serviceRunning: Boolean, backupWorking: Boolean): SetupState {
     val context = LocalContext.current
     var resumes by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumes++ }
-    return remember(serviceRunning, resumes) {
+    return remember(serviceRunning, backupWorking, resumes) {
         SetupState(
             service = serviceRunning,
             notifications = NotificationManagerCompat.from(context).areNotificationsEnabled(),
             battery = context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName),
+            backup = backupWorking,
         )
     }
 }
 
+/**
+ * @param backupLost a backup file was chosen, but can no longer be written.
+ * @param onChooseBackup called with the file the user chose for the settings backup.
+ */
 @Composable
-fun ChecklistScreen(setup: SetupState, onBack: () -> Unit) {
+fun ChecklistScreen(setup: SetupState, backupLost: Boolean, onChooseBackup: (Uri) -> Unit, onBack: () -> Unit) {
     val context = LocalContext.current
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         // Refused before, so Android no longer asks: send the user to the switch instead.
         if (!granted) context.openNotificationSettings()
+    }
+    val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let(onChooseBackup)
     }
     Surface(Modifier.fillMaxSize()) {
         Column(
@@ -121,6 +129,16 @@ fun ChecklistScreen(setup: SetupState, onBack: () -> Unit) {
                 OutlinedButton(onClick = { context.startSystemScreen(Intent(Intent.ACTION_POWER_USAGE_SUMMARY)) }) {
                     Text("Open Battery settings")
                 }
+            }
+
+            Step("Settings backup", done = setup.backup, required = false) {
+                Text(
+                    "Keeps a copy of your schedules, limits and lists in a file, updated after every change, so " +
+                        "deleting NightLock doesn't lose them. Save it somewhere like Documents. After a reinstall, " +
+                        "the home screen offers to restore it.",
+                )
+                if (backupLost) Hint("The backup file can't be written any more, so it needs choosing again.")
+                Button(onClick = { createBackup.launch("nightlock-settings.json") }) { Text("Choose a file") }
             }
 
             Text(

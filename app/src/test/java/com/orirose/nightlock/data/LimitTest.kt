@@ -42,10 +42,21 @@ class LimitTest {
     }
 
     @Test
-    fun usageFromAnotherDayDoesntCount() {
+    fun theDayRunsFromTwoToTwoSoALateNightIsStillTheSameDay() {
         val usage = used("twitter" to 60, "social" to 90)
         assertTrue(config.isBlocking(at(26, 23, 59), usage))
-        assertFalse(config.isBlocking(at(27, 0, 0), usage))
+        assertTrue(config.isBlocking(at(27, 1, 59), usage))
+        assertFalse(config.isBlocking(at(27, 2, 0), usage))
+        assertEquals(monday, limitDay(at(27, 1, 59)))
+        assertEquals(LocalDate.of(2026, 10, 27), limitDay(at(27, 2, 0)))
+        assertEquals(at(27, 2, 0), nextLimitReset(at(26, 12)))
+        assertEquals(at(27, 2, 0), nextLimitReset(at(27, 1, 59)))
+        assertEquals(at(28, 2, 0), nextLimitReset(at(27, 2, 0)))
+    }
+
+    @Test
+    fun usageFromAnotherDayDoesntCount() {
+        val usage = used("twitter" to 60, "social" to 90)
         assertEquals(LocalDate.of(2026, 10, 27), usage.on(LocalDate.of(2026, 10, 27)).day)
         assertTrue(usage.on(LocalDate.of(2026, 10, 27)).millis.isEmpty())
     }
@@ -85,9 +96,9 @@ class LimitTest {
     @Test
     fun aPauseNeverOutlastsTheDayForALimit() {
         val out = used("twitter" to 60)
-        val late = at(26, 23, 50)
+        val late = at(27, 1, 50)
         val paused = config.withPause(late, out, late.plusMinutes(30))
-        assertEquals(at(27, 0, 0), paused.limitPauses["twitter"])
+        assertEquals(at(27, 2, 0), paused.limitPauses["twitter"])
     }
 
     @Test
@@ -98,7 +109,7 @@ class LimitTest {
         val evening = at(26, 21)
         val off = withSchedule.withRestOff(evening, out)
         assertEquals(at(27, 7, 0), off.pausedUntil)
-        assertEquals(at(27, 0, 0), off.limitPauses["twitter"])
+        assertEquals(at(27, 2, 0), off.limitPauses["twitter"])
         assertFalse(off.isBlocking(evening, out))
     }
 
@@ -120,11 +131,18 @@ class LimitTest {
     }
 
     @Test
-    fun aStretchAcrossMidnightCountsOnlyThePartAfterIt() {
+    fun aStretchAcrossTheResetCountsOnlyThePartAfterIt() {
         val twentyMinutes = Durations.minutes(20)
-        val usage = used("twitter" to 50).after(setOf("twitter"), twentyMinutes, at(27, 0, 5))
+        val usage = used("twitter" to 50).after(setOf("twitter"), twentyMinutes, at(27, 2, 5))
         assertEquals(LocalDate.of(2026, 10, 27), usage.day)
         assertEquals(Durations.minutes(5), usage.of(twitter))
+    }
+
+    @Test
+    fun aStretchAcrossMidnightIsStillTheSameDay() {
+        val usage = used("twitter" to 50).after(setOf("twitter"), Durations.minutes(20), at(27, 0, 5))
+        assertEquals(monday, usage.day)
+        assertEquals(Durations.minutes(70), usage.of(twitter))
     }
 
     @Test
@@ -149,12 +167,13 @@ class LimitTest {
     }
 
     @Test
-    fun aRaisedLimitWaitsForMidnightIfItHasRunOut() {
+    fun aRaisedLimitWaitsForTheResetIfItHasRunOut() {
         val raised = config.copy(pending = listOf(Pending(applyAt = at(26, 9), limit = twitter.copy(minutes = 120))))
         val out = used("twitter" to 60)
         assertEquals(raised, raised.applyDue(noon, essentials, out))
+        assertEquals(raised, raised.applyDue(at(27, 1), essentials, out))
         assertEquals(120, raised.applyDue(noon, essentials, used("twitter" to 30)).limits.first().minutes)
-        assertEquals(120, raised.applyDue(at(27, 0), essentials, out).limits.first().minutes)
+        assertEquals(120, raised.applyDue(at(27, 2), essentials, out).limits.first().minutes)
     }
 
     @Test
@@ -165,8 +184,8 @@ class LimitTest {
     }
 
     @Test
-    fun limitsStartOverAtMidnightAndEndedPausesAreForgotten() {
-        assertEquals(at(27, 0, 0), config.nextChangeAfter(noon))
+    fun limitsStartOverAtTwoAndEndedPausesAreForgotten() {
+        assertEquals(at(27, 2, 0), config.nextChangeAfter(noon))
         val paused = config.copy(limitPauses = mapOf("twitter" to at(26, 12, 30)))
         assertEquals(at(26, 12, 30), paused.nextChangeAfter(noon))
         assertTrue(paused.applyDue(at(26, 12, 30), essentials, DayUsage()).limitPauses.isEmpty())

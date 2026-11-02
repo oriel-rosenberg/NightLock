@@ -39,7 +39,7 @@ import kotlinx.coroutines.withContext
  *
  * The system keeps this service bound (and starts it again after a reboot), which also lets it start
  * activities from the background. Nothing runs between events except one timer for the next change (a
- * schedule, the end of a pause, midnight, or the app on screen using up its daily limit), which only
+ * schedule, the end of a pause, limits starting over, or the app on screen using up its daily limit), which only
  * advances while the phone is awake: when it's asleep no one is using an app, and waking it up (screen on)
  * re-checks the clock.
  *
@@ -97,7 +97,7 @@ class BlockerService : AccessibilityService() {
     private var lastLogged: String? = null
     private var lastLoggedAt = 0L
 
-    /** Fires at the next change: a block starting or ending, a warning, a limit running out, midnight. */
+    /** Fires at the next change: a block starting or ending, a warning, a limit running out, limits starting over. */
     private val clockTick = Runnable { onClock() }
 
     /**

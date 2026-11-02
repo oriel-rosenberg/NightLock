@@ -1,5 +1,8 @@
 package com.orirose.nightlock.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -30,9 +33,11 @@ import com.orirose.nightlock.BuildConfig
 import com.orirose.nightlock.Durations
 import com.orirose.nightlock.data.Config
 import com.orirose.nightlock.data.DayUsage
+import com.orirose.nightlock.data.LIMIT_DAY_START_HOUR
 import com.orirose.nightlock.data.Pending
 import com.orirose.nightlock.data.Schedule
 import com.orirose.nightlock.data.TimeLimit
+import com.orirose.nightlock.data.limitDay
 import com.orirose.nightlock.describeDays
 import com.orirose.nightlock.formatDuration
 import com.orirose.nightlock.formatMinuteOfDay
@@ -40,6 +45,7 @@ import com.orirose.nightlock.formatTime
 import com.orirose.nightlock.formatWhen
 import java.time.Duration
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.ZoneId
 
 private val WAIT_CHOICES = listOf(1, 2, 3, 5, 10, 15, 30)
@@ -68,8 +74,10 @@ fun HomeScreen(
     onOpenBlockList: () -> Unit,
     onOpenAllowlist: () -> Unit,
     onOpenChecklist: () -> Unit,
+    onRestoreBackup: (Uri) -> Unit,
 ) {
     val blockTime = config.isBlockTime(now)
+    val pickBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(onRestoreBackup) }
     Surface(Modifier.fillMaxSize()) {
         Column(
             verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -81,6 +89,14 @@ fun HomeScreen(
                 SectionCard(MaterialTheme.colorScheme.tertiaryContainer) {
                     Text("TEST MODE", style = MaterialTheme.typography.titleMedium)
                     Text("Waits, warnings and pauses are in seconds instead of minutes; the 24-hour wait is one minute.")
+                }
+            }
+
+            if (config.isUntouched) {
+                SectionCard {
+                    Text("Installed NightLock again?", style = MaterialTheme.typography.titleMedium)
+                    Text("If you kept a settings backup, pick the file to get everything back.")
+                    OutlinedButton(onClick = { pickBackup.launch(arrayOf("*/*")) }) { Text("Restore settings") }
                 }
             }
 
@@ -148,7 +164,7 @@ fun HomeScreen(
             SectionCard {
                 Text("Daily limits", style = MaterialTheme.typography.titleMedium)
                 if (config.limits.isEmpty()) Text("None yet. Limit one app, or a group of apps that share the time.")
-                val today = usage.on(now.toLocalDate())
+                val today = usage.on(limitDay(now))
                 config.limits.forEach { limit -> LimitRow(limit, today, labelOf, onClick = { onEditLimit(limit) }) }
                 OutlinedButton(onClick = onAddLimit) { Text("Add limit") }
             }
@@ -286,7 +302,8 @@ fun blockDescription(
     val limits = config.limitsBlocking(now, usage).filter { packageName == null || packageName in it.packages }
     return listOfNotNull(
         if (config.schedulesBlocking(now)) scheduleDescription(config, now, context, packageName) else null,
-        if (limits.isEmpty()) null else "Daily limit reached: ${limits.joinToString(", ") { it.displayName(labelOf) }}. Starts over at midnight.",
+        if (limits.isEmpty()) null else "Daily limit reached: ${limits.joinToString(", ") { it.displayName(labelOf) }}. " +
+            "Starts over at ${context.formatTime(LocalTime.of(LIMIT_DAY_START_HOUR, 0))}.",
     ).joinToString("\n")
 }
 

@@ -84,7 +84,8 @@ private fun NightLockRoot(vm: MainViewModel) {
     val apps by vm.apps.collectAsStateWithLifecycle()
     val serviceRunning by BlockerService.running.collectAsStateWithLifecycle()
     val usage by BlockerService.usage.collectAsStateWithLifecycle()
-    val setup = rememberSetupState(serviceRunning)
+    val backupFailed by vm.backupFailed.collectAsStateWithLifecycle()
+    val setup = rememberSetupState(serviceRunning, backupWorking = config?.backupUri != null && !backupFailed)
     val now = rememberNow()
 
     val cfg = config
@@ -102,7 +103,10 @@ private fun NightLockRoot(vm: MainViewModel) {
     fun labelOf(packageName: String) = labels[packageName] ?: packageName
 
     // Changes whose 24 hours are up apply when NightLock comes to the front (the blocker applies them too).
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.applyDueChanges(ess) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        vm.applyDueChanges(ess)
+        vm.refreshBackup()
+    }
 
     // The allowlist closes as soon as a block starts; unlocking makes sense only while blocking; editors need a draft.
     val current = when {
@@ -159,6 +163,7 @@ private fun NightLockRoot(vm: MainViewModel) {
             onOpenBlockList = { screen = Screen.BlockList },
             onOpenAllowlist = { screen = Screen.Allowlist },
             onOpenChecklist = { screen = Screen.Checklist },
+            onRestoreBackup = vm::restoreBackup,
         )
         Screen.Unlock -> {
             val withoutManual = cfg.copy(manualBlock = false)
@@ -215,7 +220,12 @@ private fun NightLockRoot(vm: MainViewModel) {
                 cfg.pending.firstOrNull { it.allow == pkg }?.let { "Allowed from ${context.formatWhen(it.applyAt, now)} · tap to cancel" }
             },
         )
-        Screen.Checklist -> ChecklistScreen(setup = setup, onBack = { screen = Screen.Home })
+        Screen.Checklist -> ChecklistScreen(
+            setup = setup,
+            backupLost = cfg.backupUri != null && backupFailed,
+            onChooseBackup = vm::setBackupFile,
+            onBack = { screen = Screen.Home },
+        )
         Screen.Schedule -> ScheduleScreen(
             draft = editing!!,
             isNew = cfg.schedules.none { it.id == editing.id },

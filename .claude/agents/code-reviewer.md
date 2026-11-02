@@ -45,7 +45,7 @@ Never open anything under `C:\Dev\android-toolchain\keys`.
 - Intent extras and anything read from outside the app validated, never trusted to name components;
   no other app able to make itself unblockable.
 - Release signing only with the private key; no logging beyond package names; no data outside the
-  app's private storage.
+  app's private storage except the settings backup file the user picks.
 
 ## Report
 
