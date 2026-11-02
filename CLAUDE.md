@@ -30,8 +30,10 @@ README.md has the milestone plan, the permissions table, adb commands and the co
   that folder into the project. Never install a debug build on the user's phone.
 - Minimal RAM, CPU, battery and storage: nothing may run between screen changes (no foreground service, no
   polling, no periodic watchdog, no alarms, no boot receiver). Work blocking state out from the clock on
-  demand; the only timer is the service's handler for the next schedule change, which runs only while the
-  phone is awake, with screen-on and time-change broadcasts re-checking the clock.
+  demand; the only timer is the service's handler for the next change (schedule, pause end, midnight, the app
+  on screen using up a daily limit), which runs only while the phone is awake, with screen and time-change
+  broadcasts re-checking the clock. Daily limits are counted from the window changes the service already
+  sees, per limit: no usage access, and no history of app use.
 - No device admin, uninstall protection, or hiding of Settings pages: NightLock can always be switched off in
   Settings → Accessibility and uninstalled normally.
 - Every user-visible duration goes through TEST_MODE scaling once durations exist (milestone 2 onwards).

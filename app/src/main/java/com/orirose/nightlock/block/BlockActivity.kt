@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.orirose.nightlock.configRepository
+import com.orirose.nightlock.data.appLabel
 import com.orirose.nightlock.data.loadApp
 import com.orirose.nightlock.ui.NightLockTheme
 import com.orirose.nightlock.ui.blockDescription
@@ -53,16 +54,21 @@ class BlockActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this) { goHome() }
         setContent {
             val config by configRepository.config.collectAsStateWithLifecycle(initialValue = null)
+            val usage by BlockerService.usage.collectAsStateWithLifecycle()
             val now = rememberNow()
             val current = config
             val app = blockedPackage
             // When this app's block ends while the screen is up, step aside: the app underneath is allowed again.
-            LaunchedEffect(current, now, app) {
-                if (current != null && app != null && (!current.isBlocking(now) || app !in current.blockedPackagesAt(now))) finish()
+            LaunchedEffect(current, now, usage, app) {
+                if (current != null && app != null && app !in current.blockedPackagesAt(now, usage)) finish()
             }
             val context = LocalContext.current
             NightLockTheme {
-                BlockScreen(app, reason = current?.let { blockDescription(it, now, context, app) }, onGoHome = ::goHome)
+                BlockScreen(
+                    app,
+                    reason = current?.let { blockDescription(it, now, usage, context, app) { pkg -> appLabel(context, pkg) } },
+                    onGoHome = ::goHome,
+                )
             }
         }
     }

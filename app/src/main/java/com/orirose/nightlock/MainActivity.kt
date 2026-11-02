@@ -29,9 +29,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.orirose.nightlock.block.BlockerService
 import com.orirose.nightlock.data.Schedule
+import com.orirose.nightlock.data.TimeLimit
 import com.orirose.nightlock.ui.AppListScreen
 import com.orirose.nightlock.ui.ChecklistScreen
 import com.orirose.nightlock.ui.HomeScreen
+import com.orirose.nightlock.ui.LimitScreen
 import com.orirose.nightlock.ui.MainViewModel
 import com.orirose.nightlock.ui.NightLockTheme
 import com.orirose.nightlock.ui.ScheduleScreen
@@ -40,6 +42,7 @@ import com.orirose.nightlock.ui.enableNightEdgeToEdge
 import com.orirose.nightlock.ui.rememberNow
 import com.orirose.nightlock.ui.rememberSetupState
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 
 class MainActivity : ComponentActivity() {
@@ -63,22 +66,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Screen { Home, BlockList, Allowlist, Checklist, Schedule, ScheduleApps, Unlock }
+private enum class Screen { Home, BlockList, Allowlist, Checklist, Schedule, ScheduleApps, Limit, LimitApps, Unlock }
 
-/** Keeps an unsaved schedule across rotation and process death, as JSON. */
-private val draftSaver = Saver<MutableState<Schedule?>, String>(
-    save = { state -> state.value?.let { Json.encodeToString(Schedule.serializer(), it) } ?: "" },
-    restore = { mutableStateOf(if (it.isEmpty()) null else Json.decodeFromString(Schedule.serializer(), it)) },
+/** Keeps an unsaved draft across rotation and process death, as JSON. */
+private fun <T : Any> draftSaver(serializer: KSerializer<T>) = Saver<MutableState<T?>, String>(
+    save = { state -> state.value?.let { Json.encodeToString(serializer, it) } ?: "" },
+    restore = { mutableStateOf(if (it.isEmpty()) null else Json.decodeFromString(serializer, it)) },
 )
 
 @Composable
 private fun NightLockRoot(vm: MainViewModel) {
     var screen by rememberSaveable { mutableStateOf(Screen.Home) }
-    var draft by rememberSaveable(saver = draftSaver) { mutableStateOf<Schedule?>(null) }
+    var draft by rememberSaveable(saver = draftSaver(Schedule.serializer())) { mutableStateOf<Schedule?>(null) }
+    var limitDraft by rememberSaveable(saver = draftSaver(TimeLimit.serializer())) { mutableStateOf<TimeLimit?>(null) }
     val config by vm.config.collectAsStateWithLifecycle()
     val essentials by vm.essentials.collectAsStateWithLifecycle()
     val apps by vm.apps.collectAsStateWithLifecycle()
     val serviceRunning by BlockerService.running.collectAsStateWithLifecycle()
+    val usage by BlockerService.usage.collectAsStateWithLifecycle()
     val setup = rememberSetupState(serviceRunning)
     val now = rememberNow()
 
@@ -91,6 +96,7 @@ private fun NightLockRoot(vm: MainViewModel) {
     val allowlist = cfg.allowlist(ess)
     val blocked = cfg.blockedPackages - allowlist
     val editing = draft
+    val editingLimit = limitDraft
     val context = LocalContext.current
     val labels = remember(apps) { apps?.associate { it.packageName to it.label } ?: emptyMap() }
     fun labelOf(packageName: String) = labels[packageName] ?: packageName
@@ -98,30 +104,43 @@ private fun NightLockRoot(vm: MainViewModel) {
     // Changes whose 24 hours are up apply when NightLock comes to the front (the blocker applies them too).
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.applyDueChanges(ess) }
 
-    // The allowlist closes as soon as a block starts; unlocking makes sense only while blocking; the editor needs a draft.
+    // The allowlist closes as soon as a block starts; unlocking makes sense only while blocking; editors need a draft.
     val current = when {
         screen == Screen.Allowlist && cfg.isBlockTime(now) -> Screen.Home
-        screen == Screen.Unlock && !cfg.isBlocking(now) -> Screen.Home
+        screen == Screen.Unlock && !cfg.isBlocking(now, usage) -> Screen.Home
         (screen == Screen.Schedule || screen == Screen.ScheduleApps) && editing == null -> Screen.Home
+        (screen == Screen.Limit || screen == Screen.LimitApps) && editingLimit == null -> Screen.Home
         else -> screen
     }
     // Make a forced return to Home stick, so the allowlist doesn't reopen by itself once the block ends.
     LaunchedEffect(current) { screen = current }
     BackHandler(enabled = current != Screen.Home) {
-        screen = if (current == Screen.ScheduleApps) Screen.Schedule else Screen.Home
+        screen = when (current) {
+            Screen.ScheduleApps -> Screen.Schedule
+            Screen.LimitApps -> Screen.Limit
+            else -> Screen.Home
+        }
     }
     // Re-read the installed apps each time a picker opens, so a newly installed app shows up.
-    LaunchedEffect(current) { if (current == Screen.BlockList || current == Screen.Allowlist || current == Screen.ScheduleApps) vm.refreshApps() }
+    LaunchedEffect(current) {
+        if (current in setOf(Screen.BlockList, Screen.Allowlist, Screen.ScheduleApps, Screen.LimitApps)) vm.refreshApps()
+    }
 
     fun openEditor(schedule: Schedule) {
         draft = schedule
         screen = Screen.Schedule
     }
 
+    fun openLimitEditor(limit: TimeLimit) {
+        limitDraft = limit
+        screen = Screen.Limit
+    }
+
     when (current) {
         Screen.Home -> HomeScreen(
             config = cfg,
             now = now,
+            usage = usage,
             blockedCount = blocked.size,
             allowedCount = apps?.count { it.packageName in allowlist },
             setup = setup,
@@ -132,6 +151,8 @@ private fun NightLockRoot(vm: MainViewModel) {
             onScheduleEnabled = vm::setScheduleEnabled,
             onEditSchedule = ::openEditor,
             onAddSchedule = { openEditor(Schedule()) },
+            onEditLimit = ::openLimitEditor,
+            onAddLimit = { openLimitEditor(TimeLimit()) },
             onUnlockWait = vm::setUnlockWait,
             onWaitPause = vm::setWaitPause,
             onCancelPending = vm::cancelPending,
@@ -143,6 +164,8 @@ private fun NightLockRoot(vm: MainViewModel) {
             val withoutManual = cfg.copy(manualBlock = false)
             val restEnd = withoutManual.blockEndsAt(now)
             val restLabel = when {
+                !cfg.schedulesBlocking(now) -> "Rest of today"
+                cfg.limitsBlocking(now, usage).isNotEmpty() -> "Rest of this block, and of today's limits"
                 cfg.manualBlocking && restEnd != null -> "Block now off, and pause the rest until ${context.formatWhen(restEnd, now)}"
                 cfg.manualBlocking -> "Switch Block now off"
                 restEnd != null -> "Rest of this block (until ${context.formatWhen(restEnd, now)})"
@@ -227,6 +250,38 @@ private fun NightLockRoot(vm: MainViewModel) {
                 draft = editing.copy(packages = if (on) packages + pkg else packages - pkg)
             },
             onBack = { screen = Screen.Schedule },
+        )
+        Screen.Limit -> LimitScreen(
+            draft = editingLimit!!,
+            isNew = cfg.limits.none { it.id == editingLimit.id },
+            appNames = (editingLimit.packages - allowlist).map(::labelOf),
+            onChange = { limitDraft = it },
+            onChooseApps = { screen = Screen.LimitApps },
+            onSave = {
+                vm.saveLimit(editingLimit.copy(packages = editingLimit.packages - allowlist))
+                limitDraft = null
+                screen = Screen.Home
+            },
+            onDelete = {
+                vm.deleteLimit(editingLimit.id)
+                limitDraft = null
+                screen = Screen.Home
+            },
+            onBack = {
+                limitDraft = null
+                screen = Screen.Home
+            },
+        )
+        Screen.LimitApps -> AppListScreen(
+            title = "Apps for this limit",
+            subtitle = "One app gets its own limit; several share it. Saved with the limit.",
+            apps = apps,
+            selected = editingLimit!!.packages - allowlist,
+            disabledReason = { if (it in allowlist) "Always allowed" else null },
+            onToggle = { pkg, on ->
+                limitDraft = editingLimit.copy(packages = if (on) editingLimit.packages + pkg else editingLimit.packages - pkg)
+            },
+            onBack = { screen = Screen.Limit },
         )
     }
 }

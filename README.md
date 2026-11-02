@@ -3,14 +3,15 @@
 A personal Android app blocker for bedtime. It's sideloaded on one Samsung Galaxy and isn't meant for the Play Store.
 Kotlin, Jetpack Compose, minSdk 26, targetSdk 37. No network permission.
 
-## Status: version 0.3.1
+## Status: version 0.4.0
 
 | # | Milestone | State |
 |---|-----------|-------|
 | 1 | Block list, "Block now" switch, accessibility blocking, block screen | done |
 | 2 | **Runs on its own:** schedules (crossing midnight), wind-down warning, survives reboots, setup checklist (incl. Samsung battery steps) | done |
-| 3 | **Hard to give in:** unlock by waiting or by typing, strict mode with a 24 h wait for easier changes | done; 0.3.1 has the fixes from testing on the phone |
-| 4 | A simple log and stats | optional, not started |
+| 3 | **Hard to give in:** unlock by waiting or by typing, strict mode with a 24 h wait for easier changes | done |
+| 0.4 | **Daily limits:** a time limit a day for one app or a group of apps, unlocked the same two ways | **this build** |
+| next | A simple log and stats | optional, not started |
 
 Milestone 3 follows the user's own design rather than the original spec: two unlock paths, the same cost every
 time (no escalation, no nightly cap), and "Rest of this block" in place of a separate emergency unlock.
@@ -21,9 +22,9 @@ Accessibility always works; it's a deliberate trip into Settings rather than a q
 
 **Low power by design.** Nothing runs between screen changes: no foreground service, no polling, no
 watchdog, no alarms. Whether a block is on is worked out from the clock each time the screen changes. While
-the phone is awake, one timer fires at the next schedule change (a block starting while you're in a blocked app,
-or a wind-down warning). It doesn't wake a sleeping phone; turning the screen on re-checks the clock instead,
-since nobody is using an app while the screen is off. Android restarts the accessibility service after a
+the phone is awake, one timer fires at the next change (a block starting while you're in a blocked app, a wind-down
+warning, the app on screen using up its daily limit, midnight). It doesn't wake a sleeping phone; turning the
+screen on re-checks the clock instead, since nobody is using an app while the screen is off. Android restarts the accessibility service after a
 reboot by itself, so no "start at boot" permission is needed either. The trade-off: if the system kills the
 accessibility service, nothing blocks until it restarts. The Samsung battery steps in the setup checklist make
 that unlikely.
@@ -139,8 +140,8 @@ app, add it to the allowlist** to be sure its ringing screen always shows.
 NightLock's links to Settings go only to a preinstalled app; if none can open the page, nothing opens.
 
 **Nothing can leave the phone.** No internet permission (stripped even if a library asks for it), nothing shared
-with other apps. Settings stay in NightLock's private storage, with Android backup off. Logs hold package names
-only, and only adb can read them.
+with other apps. Settings stay in NightLock's private storage, with Android backup off. So does today's time on each
+daily limit, which is replaced every day and keeps no history. Logs hold package names only, and only adb can read them.
 
 **Only you can update it.** Android installs an update over NightLock only if it's signed with the same key, and an
 update keeps NightLock's accessibility access. Release builds are signed with a private 4096-bit RSA key with a
@@ -169,7 +170,7 @@ can't install over the release build.
 
 - `BlockerService` (accessibility) listens for `TYPE_WINDOW_STATE_CHANGED` and `TYPE_WINDOWS_CHANGED`. It checks the
   package of the event and of every visible app window (`flagRetrieveInteractiveWindows`), so both halves of split screen
-  and Samsung pop-up windows are covered (pop-ups tested on a Galaxy A54). Each window's package is read once and remembered, so a busy app can't slow it down.
+  and Samsung pop-up windows are covered (pop-ups tested on a Galaxy A54). Each window's package is read once and remembered, and a window that can't be read isn't asked again for a second, so a busy app can't keep slowing it down.
 - When it finds a blocked app on screen, it opens `BlockActivity` full screen. Back, or **Go to home screen**, opens the
   launcher. The block screen has its own task and is hidden from Recents, so it can't lead back to the blocked app.
 - 1.5 s later the service checks again. If a blocked app is somehow still visible (split screen, or the block screen
@@ -183,6 +184,22 @@ either the main block list or its own list. An end time before the start (23:30�
 a Monday 23:30–07:00 schedule blocks from Monday 23:30 to Tuesday 07:00. Times are the phone's wall-clock times.
 Schedules that touch (one ends at 07:00, another starts at 07:00) count as one block, and the block screen shows
 the final end time. When a block ends while the block screen is up, it closes by itself.
+
+**Daily limits.** A limit gives one app, or a group of apps, a time allowance per calendar day. Twitter and Facebook can
+each have 1 hour, plus a 90-minute group limit on the two: every limit counts on its own, and whichever runs out first
+blocks its apps until midnight. So an app can be blocked three ways: a schedule, its own limit, or a group limit.
+
+- **What counts:** time with the app on screen while the phone is awake and unlocked, including split screen and
+  pop-up windows. Time on a group counts once even if two of its apps share the screen. Only limits are counted: no
+  history of other app use is kept, and a new limit starts from zero.
+- **How it's counted:** by the accessibility service, from the window changes it already sees, so there's no new
+  permission. Numbers can differ a little from Samsung's own screen-time figures.
+- **Unlocking** works the same two ways, and covers only the limits that have run out at that moment. "Rest of today"
+  lasts until midnight. A schedule that starts during the pause, or another limit that runs out, still blocks.
+- **Strict mode:** lowering a limit or adding apps applies at once; raising it, removing apps or deleting it takes
+  24 hours, and is refused during a schedule or Block now. Unlike a schedule, a limit can't be switched off for today.
+  A change to a limit that has already run out waits for midnight.
+- A limit that has run out doesn't lock the other settings: that only happens during a schedule or Block now.
 
 **Unlocking.** The block screen has no unlock button on purpose: it only says unlocking is done in NightLock.
 In NightLock, **Unlock…** offers two paths:
@@ -203,6 +220,23 @@ on the home screen, where it can be cancelled. A queued change whose 24 hours ru
 block to end. **Switching a schedule off or deleting it applies at once** outside a block (no 24-hour wait, by
 choice); during a block it's refused too. Block now can only be switched off through Unlock. A pause never runs
 past the end of its block, and "Rest of this block" lasts at most a day.
+
+## Testing 0.4
+
+Quickest with a TEST_MODE build (`.\build.cmd assembleRelease "-Pnightlock.testMode=true"`): a limit's "minutes" are
+seconds. Then reinstall a normal build for real use.
+
+1. **Add limit** → choose one app → 2 (minutes, or seconds in a test build). Open the app and leave it: the block screen
+   appears by itself when the time is up, with no taps. It says *Daily limit reached* and that it starts over at midnight.
+2. The home screen shows the limit as reached, and **Blocking now**.
+3. Use the app for part of its limit, leave it, turn the screen off for a while, come back: the time off screen isn't counted.
+4. **Group:** two apps with a shared limit shorter than their own limits. Use one, then the other: both get blocked once the
+   shared time is used up, even though each has time left of its own.
+5. **Unlock** a limit that ran out, either way: only that limit is paused. **Rest of today** lasts until midnight. A schedule
+   starting during the pause still blocks.
+6. Raise a limit or delete it: it goes under **Waiting 24 hours**. Lower it: it applies at once.
+7. After midnight every limit starts from zero and any block from a limit ends.
+8. Restart the phone part-way through a limit: the time used so far is kept.
 
 ## Testing 0.3.1
 
@@ -245,7 +279,10 @@ Accepted limitations:
 - **Changing the phone's clock** moves the schedules with it, ends a pause early or late, and can run out the 24-hour
   wait for easier changes.
 - **No fallback** if the accessibility service gets killed. This is deliberate, to save battery (see *Low power by design*).
-- **Picture-in-picture** windows of blocked apps are left alone. Covering them would trap you on the block screen, because
+- **Daily limits count only what the service sees:** nothing is counted while it's off, audio playing in the background
+  doesn't count, and if the app is killed part-way through a stretch of use, that stretch is lost. Changing the date
+  starts the day's counts over.
+- **Picture-in-picture** windows of blocked apps are left alone, and don't count towards a daily limit. Covering them would trap you on the block screen, because
   PiP floats above it. Opening the PiP window to full size is blocked as normal.
 - **Secure Folder / work profile**: apps installed only there don't show in the picker. A blocked package is still blocked there.
 
@@ -259,6 +296,7 @@ app/src/main/java/com/orirose/nightlock/
   Format.kt                times, days and durations as text
   data/Config.kt           Config (one JSON document in DataStore), what's blocked when + ConfigRepository
   data/Schedule.kt         Schedule and its runs (Occurrence); crossing midnight (unit tested)
+  data/Limit.kt            TimeLimit (one app or a group), DayUsage, saving today's counts (unit tested)
   data/Apps.kt             installed-app loading, Essentials (never-blocked apps)
   block/BlockRules.kt      which packages are blocked at a moment (unit tested)
   block/BlockerService.kt  accessibility service: detects blocked apps, schedule timer, opens the block screen
@@ -267,6 +305,7 @@ app/src/main/java/com/orirose/nightlock/
   block/Pauses.kt          the countdown notification during a pause
   data/Serializers.kt      saving times as text
   ui/MainViewModel.kt      every settings change; strict mode is enforced here
+  ui/LimitScreen.kt        the daily limit editor
   ui/UnlockScreen.kt       the wait, the 25-letter text, the pause choices
   ui/                      other Compose screens (home, schedule editor, app lists, setup checklist), theme
 ```

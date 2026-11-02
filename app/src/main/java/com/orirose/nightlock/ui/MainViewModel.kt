@@ -4,13 +4,16 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.orirose.nightlock.Durations
+import com.orirose.nightlock.block.BlockerService
 import com.orirose.nightlock.block.Pauses
 import com.orirose.nightlock.configRepository
 import com.orirose.nightlock.data.AppEntry
 import com.orirose.nightlock.data.Config
+import com.orirose.nightlock.data.DayUsage
 import com.orirose.nightlock.data.Essentials
 import com.orirose.nightlock.data.Pending
 import com.orirose.nightlock.data.Schedule
+import com.orirose.nightlock.data.TimeLimit
 import com.orirose.nightlock.data.loadLaunchableApps
 import com.orirose.nightlock.formatWhen
 import java.time.Duration
@@ -31,8 +34,8 @@ import kotlinx.coroutines.withContext
 /**
  * All changes to the settings go through here, and here strict mode is enforced:
  * - a change that makes NightLock stricter applies at once;
- * - one that makes it easier is refused during a block (paused or not), and otherwise waits 24 hours,
- *   except switching off or deleting a whole schedule, which applies at once outside a block;
+ * - one that makes it easier is refused during a schedule or "Block now" (paused or not), and otherwise
+ *   waits 24 hours, except switching off or deleting a whole schedule, which applies at once outside a block;
  * - undoing a waiting change, which is stricter, always works.
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -47,6 +50,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _apps = MutableStateFlow<List<AppEntry>?>(null)
     val apps: StateFlow<List<AppEntry>?> = _apps.asStateFlow()
 
+    /** Today's time on each limit, as counted by the blocker. */
+    private val usage: DayUsage get() = BlockerService.usage.value
+
     init {
         refreshApps()
     }
@@ -57,7 +63,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Applies waiting changes whose 24 hours are up. Called when the app comes to the front. */
-    fun applyDueChanges(essentials: Essentials) = change { config, now -> Outcome(config.applyDue(now, essentials)) }
+    fun applyDueChanges(essentials: Essentials) = change { config, now -> Outcome(config.applyDue(now, essentials, usage)) }
 
     /** Switching it off while it blocks something is an unlock; it can only be switched off here when it doesn't. */
     fun setManualBlock(on: Boolean) = change { config, _ ->
@@ -126,6 +132,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         Outcome(config.copy(schedules = updated, pending = pending))
     }
 
+    /**
+     * Adds a new limit at once. Changes to an existing one apply at once only if they're stricter: unlike a
+     * schedule, a limit can't simply be turned off for today.
+     */
+    fun saveLimit(limit: TimeLimit) = change { config, now ->
+        val old = config.limits.firstOrNull { it.id == limit.id }
+        val withoutWaiting = config.copy(pending = config.pending.filterNot { it.limitId == limit.id })
+        when {
+            old == null -> Outcome(config.copy(limits = config.limits + limit))
+            limit.isAtLeastAsStrictAs(old) ->
+                Outcome(withoutWaiting.copy(limits = config.limits.map { if (it.id == limit.id) limit else it }))
+            else -> easier(withoutWaiting, now, Pending(applyAt = cooldownEnd(now), limit = limit))
+        }
+    }
+
+    /** Deleting a limit makes things easier, so it takes the 24 hours; its other waiting changes go. */
+    fun deleteLimit(id: String) = change { config, now ->
+        val withoutWaiting = config.copy(pending = config.pending.filterNot { it.limitId == id })
+        easier(withoutWaiting, now, Pending(applyAt = cooldownEnd(now), deleteLimit = id))
+    }
+
     /** Unlock by waiting, X: a longer wait is stricter. */
     fun setUnlockWait(minutes: Int) = change { config, now ->
         val withoutWaiting = config.copy(pending = config.pending.filter { it.unlockWaitMinutes == null })
@@ -150,34 +177,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun pauseAfterWaiting() = pause { it.waitPauseMinutes }
 
     /**
-     * Blocking stops for [minutesOf] the saved config, or until the block ends if that's sooner, so the pause
-     * can't carry over into the next block.
+     * What's blocking stops for [minutesOf] the saved config, or until it ends if that's sooner. Only while
+     * actually blocking: a running pause is never stacked onto or replaced.
      */
     private fun pause(minutesOf: (Config) -> Int) = change { config, now ->
-        // Only while actually blocking: never stacks onto, or replaces, a pause already running.
-        if (!config.isBlocking(now)) return@change Outcome(config)
-        val short = now.plus(Duration.ofMillis(Durations.minutes(minutesOf(config))))
-        val until = config.blockEndsAt(now)?.let { minOf(it, short) } ?: short
-        Outcome(config.copy(pausedUntil = until), after = { Pauses.show(getApplication(), until) })
+        if (!config.isBlocking(now, usage)) return@change Outcome(config)
+        val until = now.plus(Duration.ofMillis(Durations.minutes(minutesOf(config))))
+        paused(config.withPause(now, usage, until), now)
     }
 
-    /**
-     * After the unlock screen: "Block now" goes off, and running schedules pause until they end, at most
-     * a day (schedules that touch end to end could otherwise run on for weeks).
-     */
+    /** After the unlock screen: what's blocking stops for the rest of its block, or for today if it's a limit. */
     fun pauseRestOfBlock() = change { config, now ->
-        if (!config.isBlockTime(now)) return@change Outcome(config)
-        val withoutManual = config.copy(manualBlock = false)
-        val until = withoutManual.blockEndsAt(now)?.let { minOf(it, now.plusDays(1)) }
-        Outcome(
-            withoutManual.copy(pausedUntil = until ?: config.pausedUntil),
-            after = { if (until != null) Pauses.show(getApplication(), until) else Pauses.cancel(getApplication()) },
-        )
+        if (!config.isBlocking(now, usage)) return@change Outcome(config)
+        paused(config.withRestOff(now, usage), now)
     }
 
-    /** Ends a pause early: stricter, so always allowed. */
+    /** Saves a paused [config] and shows the countdown to the first pause ending. */
+    private fun paused(config: Config, now: LocalDateTime) = Outcome(
+        config,
+        after = { config.pauseEndsAt(now)?.let { Pauses.show(getApplication(), it) } ?: Pauses.cancel(getApplication()) },
+    )
+
+    /** Ends every pause early: stricter, so always allowed. */
     fun endPause() = change { config, _ ->
-        Outcome(config.copy(pausedUntil = null), after = { Pauses.cancel(getApplication()) })
+        Outcome(config.copy(pausedUntil = null, limitPauses = emptyMap()), after = { Pauses.cancel(getApplication()) })
     }
 
     private fun cooldownEnd(now: LocalDateTime): LocalDateTime = now.plus(Duration.ofMillis(Durations.COOLDOWN_MS))

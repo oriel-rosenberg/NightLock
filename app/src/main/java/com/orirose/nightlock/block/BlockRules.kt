@@ -1,6 +1,7 @@
 package com.orirose.nightlock.block
 
 import com.orirose.nightlock.data.Config
+import com.orirose.nightlock.data.DayUsage
 import com.orirose.nightlock.data.Essentials
 import java.time.LocalDateTime
 
@@ -13,9 +14,9 @@ class BlockRules(val active: Boolean, val blocked: Set<String>) {
         val OFF = BlockRules(active = false, blocked = emptySet())
 
         /** Allowlisted and essential apps are taken out of the block list, whatever the config says. */
-        fun from(config: Config, essentials: Essentials, now: LocalDateTime) = BlockRules(
-            active = config.isBlocking(now),
-            blocked = config.blockedPackagesAt(now) - config.allowlist(essentials),
+        fun from(config: Config, essentials: Essentials, now: LocalDateTime, usage: DayUsage) = BlockRules(
+            active = config.isBlocking(now, usage),
+            blocked = config.blockedPackagesAt(now, usage) - config.allowlist(essentials),
         )
     }
 }

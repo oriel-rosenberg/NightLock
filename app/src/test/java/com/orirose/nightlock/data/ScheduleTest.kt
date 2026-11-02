@@ -16,7 +16,7 @@ class ScheduleTest {
     private val night = Schedule(id = "night", days = setOf(monday), startMinute = 23 * 60 + 30, endMinute = 7 * 60, warningMinutes = 15)
     private val afternoon = Schedule(id = "afternoon", days = setOf(monday), startMinute = 14 * 60, endMinute = 16 * 60, warningMinutes = 0)
 
-    private fun Config.blocking(t: LocalDateTime) = isBlocking(t)
+    private fun Config.blocking(t: LocalDateTime) = isBlocking(t, DayUsage())
     private val main = setOf("main.app")
 
     @Test
@@ -70,9 +70,9 @@ class ScheduleTest {
             blockedPackages = setOf("main.app"),
             schedules = listOf(night, afternoon.copy(packages = setOf("own.app"))),
         )
-        assertEquals(setOf("own.app"), config.blockedPackagesAt(at(26, 15, 0)))
-        assertEquals(setOf("main.app"), config.blockedPackagesAt(at(26, 23, 45)))
-        assertEquals(setOf("main.app"), config.copy(manualBlock = true).blockedPackagesAt(at(27, 12, 0)))
+        assertEquals(setOf("own.app"), config.blockedPackagesAt(at(26, 15, 0), DayUsage()))
+        assertEquals(setOf("main.app"), config.blockedPackagesAt(at(26, 23, 45), DayUsage()))
+        assertEquals(setOf("main.app"), config.copy(manualBlock = true).blockedPackagesAt(at(27, 12, 0), DayUsage()))
     }
 
     @Test

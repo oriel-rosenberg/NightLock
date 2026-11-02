@@ -28,10 +28,9 @@ android {
         applicationId = "com.orirose.nightlock"
         minSdk = 26
         targetSdk = 37
-        versionCode = 6
-        versionName = "0.3.1"
+        versionCode = 7
+        versionName = "0.4.0"
 
-        buildConfigField("boolean", "TEST_MODE", testMode.toString())
         resValue("string", "app_name", if (testMode) "NightLock TEST" else "NightLock")
     }
 
@@ -47,7 +46,12 @@ android {
     }
 
     buildTypes {
+        // The unit tests run on the debug build, and count in real minutes even for a TEST_MODE APK.
+        debug {
+            buildConfigField("boolean", "TEST_MODE", "false")
+        }
         release {
+            buildConfigField("boolean", "TEST_MODE", testMode.toString())
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

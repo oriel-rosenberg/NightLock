@@ -29,8 +29,10 @@ import androidx.compose.ui.unit.dp
 import com.orirose.nightlock.BuildConfig
 import com.orirose.nightlock.Durations
 import com.orirose.nightlock.data.Config
+import com.orirose.nightlock.data.DayUsage
 import com.orirose.nightlock.data.Pending
 import com.orirose.nightlock.data.Schedule
+import com.orirose.nightlock.data.TimeLimit
 import com.orirose.nightlock.describeDays
 import com.orirose.nightlock.formatDuration
 import com.orirose.nightlock.formatMinuteOfDay
@@ -47,6 +49,7 @@ private val WAIT_PAUSE_CHOICES = listOf(5, 10, 15, 20, 30, 45, 60)
 fun HomeScreen(
     config: Config,
     now: LocalDateTime,
+    usage: DayUsage,
     blockedCount: Int,
     allowedCount: Int?,
     setup: SetupState,
@@ -57,6 +60,8 @@ fun HomeScreen(
     onScheduleEnabled: (id: String, enabled: Boolean) -> Unit,
     onEditSchedule: (Schedule) -> Unit,
     onAddSchedule: () -> Unit,
+    onEditLimit: (TimeLimit) -> Unit,
+    onAddLimit: () -> Unit,
     onUnlockWait: (Int) -> Unit,
     onWaitPause: (Int) -> Unit,
     onCancelPending: (Pending) -> Unit,
@@ -79,7 +84,7 @@ fun HomeScreen(
                 }
             }
 
-            StatusCard(config, now, setup.service, onUnlock, onEndPause)
+            StatusCard(config, now, usage, setup.service, labelOf, onUnlock, onEndPause)
 
             if (setup.done < setup.total) {
                 SectionCard(if (setup.service) Color.Unspecified else MaterialTheme.colorScheme.tertiaryContainer) {
@@ -141,6 +146,14 @@ fun HomeScreen(
             }
 
             SectionCard {
+                Text("Daily limits", style = MaterialTheme.typography.titleMedium)
+                if (config.limits.isEmpty()) Text("None yet. Limit one app, or a group of apps that share the time.")
+                val today = usage.on(now.toLocalDate())
+                config.limits.forEach { limit -> LimitRow(limit, today, labelOf, onClick = { onEditLimit(limit) }) }
+                OutlinedButton(onClick = onAddLimit) { Text("Add limit") }
+            }
+
+            SectionCard {
                 Text("Blocked apps", style = MaterialTheme.typography.titleMedium)
                 Text("$blockedCount chosen. Used by Block now, and by schedules set to the main list.")
                 Button(onClick = onOpenBlockList) { Text("Choose apps") }
@@ -190,22 +203,26 @@ fun HomeScreen(
 }
 
 @Composable
-private fun StatusCard(config: Config, now: LocalDateTime, serviceRunning: Boolean, onUnlock: () -> Unit, onEndPause: () -> Unit) {
+private fun StatusCard(
+    config: Config,
+    now: LocalDateTime,
+    usage: DayUsage,
+    serviceRunning: Boolean,
+    labelOf: (String) -> String,
+    onUnlock: () -> Unit,
+    onEndPause: () -> Unit,
+) {
     val context = LocalContext.current
-    val blockTime = config.isBlockTime(now)
-    val paused = blockTime && config.isPaused(now)
-    SectionCard(if (blockTime && !paused) MaterialTheme.colorScheme.primaryContainer else Color.Unspecified) {
+    val blocking = config.isBlocking(now, usage)
+    val paused = config.hasPausedBlock(now, usage)
+    SectionCard(if (blocking) MaterialTheme.colorScheme.primaryContainer else Color.Unspecified) {
         when {
-            paused -> {
-                Text("Paused", style = MaterialTheme.typography.titleMedium)
-                Text("Blocking again at ${context.formatTime(config.pausedUntil!!.toLocalTime())}.")
-                OutlinedButton(onClick = onEndPause) { Text("End pause now") }
-            }
-            blockTime -> {
+            blocking -> {
                 Text("Blocking now", style = MaterialTheme.typography.titleMedium)
-                Text(blockDescription(config, now, context))
+                Text(blockDescription(config, now, usage, context, labelOf = labelOf))
                 Button(onClick = onUnlock) { Text("Unlock…") }
             }
+            paused -> Text("Paused", style = MaterialTheme.typography.titleMedium)
             else -> {
                 Text("Not blocking", style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -213,6 +230,10 @@ private fun StatusCard(config: Config, now: LocalDateTime, serviceRunning: Boole
                         ?: "No schedule coming up.",
                 )
             }
+        }
+        if (paused) {
+            config.pauseEndsAt(now)?.let { Text("A pause ends at ${context.formatTime(it.toLocalTime())}.") }
+            OutlinedButton(onClick = onEndPause) { Text("End pause now") }
         }
         if (!serviceRunning) {
             Text(
@@ -225,7 +246,10 @@ private fun StatusCard(config: Config, now: LocalDateTime, serviceRunning: Boole
 
 private fun describe(change: Pending, config: Config, labelOf: (String) -> String): String {
     val scheduleName = change.scheduleId?.let { id -> config.schedules.firstOrNull { it.id == id }?.name } ?: "a schedule"
+    val limitName = change.limitId?.let { id -> config.limits.firstOrNull { it.id == id }?.displayName(labelOf) } ?: "a limit"
     return when {
+        change.deleteLimit != null -> "Delete limit: $limitName"
+        change.limit != null -> "Change limit: $limitName"
         change.unblock != null -> "Unblock ${labelOf(change.unblock)}"
         change.allow != null -> "Always allow ${labelOf(change.allow)}"
         change.deleteSchedule != null -> "Delete $scheduleName"
@@ -248,19 +272,51 @@ private fun PendingRow(what: String, applies: String, onCancel: () -> Unit) {
 }
 
 /**
- * "Bedtime · ends 07:00 (in 6 h 12 min)", or the manual switch, for [packageName] or for any block if null.
- * Shared with the block screen.
+ * Why [packageName] (or anything, if null) is blocked, one line per reason: a schedule, the manual switch, or
+ * daily limits. Shared with the block screen.
  */
-fun blockDescription(config: Config, now: LocalDateTime, context: android.content.Context, packageName: String? = null): String {
+fun blockDescription(
+    config: Config,
+    now: LocalDateTime,
+    usage: DayUsage,
+    context: android.content.Context,
+    packageName: String? = null,
+    labelOf: (String) -> String,
+): String {
+    val limits = config.limitsBlocking(now, usage).filter { packageName == null || packageName in it.packages }
+    return listOfNotNull(
+        if (config.schedulesBlocking(now)) scheduleDescription(config, now, context, packageName) else null,
+        if (limits.isEmpty()) null else "Daily limit reached: ${limits.joinToString(", ") { it.displayName(labelOf) }}. Starts over at midnight.",
+    ).joinToString("\n")
+}
+
+/** "Bedtime · ends 07:00 (in 6 h 12 min)", the manual switch, or null if neither covers [packageName]. */
+private fun scheduleDescription(config: Config, now: LocalDateTime, context: android.content.Context, packageName: String?): String? {
     if (config.manualBlocking && (packageName == null || packageName in config.blockedPackages)) {
         return "\"Block now\" is on."
     }
-    val names = config.activeScheduleNames(now, packageName).joinToString(", ")
+    val names = config.activeScheduleNames(now, packageName).joinToString(", ").ifEmpty { return null }
     val end = config.blockEndsAt(now, packageName) ?: return names
     // Through time zones, so a daylight-saving night counts its real length.
     val zone = ZoneId.systemDefault()
     val left = Duration.between(now.atZone(zone), end.atZone(zone))
     return "$names · ends ${context.formatWhen(end, now)} (in ${formatDuration(left)})"
+}
+
+@Composable
+private fun LimitRow(limit: TimeLimit, today: DayUsage, labelOf: (String) -> String, onClick: () -> Unit) {
+    val used = today.of(limit)
+    val reached = used >= limit.allowanceMs
+    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp)) {
+        Text(limit.displayName(labelOf), style = MaterialTheme.typography.bodyLarge)
+        Text(
+            if (reached) "Limit reached: ${limit.minutes} ${Durations.minuteUnit}"
+            else "${used / Durations.minutes(1)} of ${limit.minutes} ${Durations.minuteUnit} used today" +
+                if (limit.packages.size > 1) " · ${limit.packages.size} apps" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (reached) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

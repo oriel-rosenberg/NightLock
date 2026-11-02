@@ -99,6 +99,12 @@ fun loadLaunchableApps(context: Context): List<AppEntry> {
         .sortedBy { it.label.lowercase() }
 }
 
+/** One app's name, or its package name if it isn't installed. */
+fun appLabel(context: Context, packageName: String): String = runCatching {
+    val pm = context.packageManager
+    pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+}.getOrDefault(packageName)
+
 /** One app's name and icon, or null if it isn't installed. */
 fun loadApp(context: Context, packageName: String): AppEntry? = runCatching {
     val pm = context.packageManager

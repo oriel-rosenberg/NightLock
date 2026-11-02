@@ -52,8 +52,8 @@ class StrictModeTest {
         val config = Config(blockedPackages = main, schedules = listOf(night), pausedUntil = at(27, 0, 15))
         assertTrue(config.isBlockTime(at(27, 0, 0)))
         assertTrue(config.isPaused(at(27, 0, 0)))
-        assertFalse(config.isBlocking(at(27, 0, 0)))
-        assertTrue(config.isBlocking(at(27, 0, 15)))
+        assertFalse(config.isBlocking(at(27, 0, 0), DayUsage()))
+        assertTrue(config.isBlocking(at(27, 0, 15), DayUsage()))
         assertEquals(at(27, 0, 15), config.nextChangeAfter(at(27, 0, 0)))
     }
 
@@ -68,13 +68,13 @@ class StrictModeTest {
                 Pending(applyAt = at(28, 12), deleteSchedule = "night"),
             ),
         )
-        assertEquals(config, config.applyDue(at(27, 11), essentials))
-        val applied = config.applyDue(at(27, 12), essentials)
+        assertEquals(config, config.applyDue(at(27, 11), essentials, DayUsage()))
+        val applied = config.applyDue(at(27, 12), essentials, DayUsage())
         assertEquals(main, applied.blockedPackages)
         assertEquals(setOf("com.android.settings", "sms.app", "chat.app"), applied.allowedPackages)
         assertEquals(listOf(night), applied.schedules)
         assertEquals(1, applied.pending.size)
-        assertTrue(applied.applyDue(at(28, 12), essentials).schedules.isEmpty())
+        assertTrue(applied.applyDue(at(28, 12), essentials, DayUsage()).schedules.isEmpty())
         assertEquals(at(27, 12), config.nextChangeAfter(at(27, 8)))
     }
 
@@ -86,16 +86,16 @@ class StrictModeTest {
             pending = listOf(Pending(applyAt = at(26, 23, 45), deleteSchedule = "night")),
         )
         // Due at 23:45 Monday, but the block runs until 07:00 Tuesday, paused or not.
-        assertEquals(config, config.applyDue(at(27, 1), essentials))
-        assertEquals(config.copy(pausedUntil = at(27, 1, 30)), config.copy(pausedUntil = at(27, 1, 30)).applyDue(at(27, 1), essentials))
-        assertTrue(config.applyDue(at(27, 7), essentials).schedules.isEmpty())
+        assertEquals(config, config.applyDue(at(27, 1), essentials, DayUsage()))
+        assertEquals(config.copy(pausedUntil = at(27, 1, 30)), config.copy(pausedUntil = at(27, 1, 30)).applyDue(at(27, 1), essentials, DayUsage()))
+        assertTrue(config.applyDue(at(27, 7), essentials, DayUsage()).schedules.isEmpty())
     }
 
     @Test
     fun anEndedPauseIsForgotten() {
         val config = Config(blockedPackages = main, schedules = listOf(night), pausedUntil = at(27, 0, 15))
-        assertNull(config.applyDue(at(27, 0, 15), essentials).pausedUntil)
-        assertEquals(at(27, 0, 15), config.applyDue(at(27, 0, 10), essentials).pausedUntil)
+        assertNull(config.applyDue(at(27, 0, 15), essentials, DayUsage()).pausedUntil)
+        assertEquals(at(27, 0, 15), config.applyDue(at(27, 0, 10), essentials, DayUsage()).pausedUntil)
     }
 
     @Test
